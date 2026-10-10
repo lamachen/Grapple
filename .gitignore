@@ -1,0 +1,64 @@
+# ── Betriebssystem ────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ── Editoren / IDEs ───────────────────────────────────────────────
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# ── Node.js (Tools/Test-Skripte) ─────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json.bak
+.npm/
+
+# ── Python (tools/build.py) ──────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Build-Artefakte / temporäre Ausgaben ─────────────────────────
+# Hinweis: grapple/index.html ist das gebaute Artefakt und wird
+# bewusst MIT versioniert, damit das Spiel ohne Build-Schritt läuft.
+dist/
+build/
+out/
+tmp/
+*.tmp
+*.bak
+*.log
+
+# ── Browser-Test-Artefakte (tools/test_browser.js, probe_*.js) ───
+screenshots/
+test-results/
+playwright-report/
+coverage/
+
+# ── Umgebungsvariablen / Secrets ─────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
