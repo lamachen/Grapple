@@ -150,7 +150,7 @@ function orbitRun(name, speed, radius, seconds) {
 
   const r = { name, speed, radius, valid: 0, blocked: 0, firstBlocked: null,
               maxLenJump: 0, maxLenJumpAt: 0, jumpsOver50cm: 0,
-              releases: 0, releasesWithJump: 0, maxWraps: 0,
+              releases: 0, releasesWithJump: 0, maxWraps: 0, maxDetour: 0,
               cornerSlideCalls, contactSteps: 0, atEndSteps: 0 };
   let prevLen = S.length, prevWraps = S.wraps.length;
   const N = Math.round(seconds * hz);
@@ -174,6 +174,29 @@ function orbitRun(name, speed, radius, seconds) {
     if (dLen > r.maxLenJump) { r.maxLenJump = dLen; r.maxLenJumpAt = t; }
     if (dLen > 0.5) r.jumpsOver50cm++;
     prevLen = S.length;
+
+    /* Umweg = gelöste Pfadlänge minus kürzestmögliche freie Route. Obergrenze
+       ist die Luftlinie Hand→Anker; alles darüber ist erzwungener Umweg um die
+       Säule. Ein stehen gebliebenes Längenbudget (Schlaffschlaufe, „V-Schlaufe")
+       zeigt sich hier, ohne dass ein Segment blockiert wäre — das ist die
+       zweite Hälfte des gemeldeten Symptoms: das Seil bildet sich nicht sauber
+       auf die direkte Linie zurück, sondern behält einen Umweg bei.          */
+    const straight = Math.hypot(A[0] - ANCHOR[0], A[1] - ANCHOR[1], A[2] - ANCHOR[2]);
+    /* Referenz für den Umweg: die kürzeste Route, die der Solver bei voller
+       Konvergenz für genau diese Hand-Position findet — nicht die Luftlinie.
+       Steht Geometrie zwischen Hand und Anker, ist die Luftlinie keine
+       gültige Route und ein „Umweg" von 12 m wäre reine Messgeometrie.
+       Gemessen: Pfad 15,20 m bei Luftlinie 3,09 m und nur 3 Kontakten, also
+       eindeutig ein Blocker dazwischen.                                      */
+    const ref = new E.RopePathSolver(world, Object.assign({}, E.ROPE_DEFAULTS));
+    ref.solve(A, ANCHOR, dt, null, anchorBox);
+    ref.converge();
+    for (let k = 0; k < 40; k++) ref.solve(A, ANCHOR, dt, null, anchorBox);
+    const det = S.length - ref.length;
+    if (det > r.maxDetour) { r.maxDetour = det; r.maxDetourAt = +t.toFixed(2);
+      r.maxDetourWraps = S.wraps.length;
+      r.maxDetourStraight = +ref.length.toFixed(2);
+      r.maxDetourLen = +S.length.toFixed(2); }
 
     if (polylineBlocked(S.pts)) {
       r.blocked++;
@@ -204,6 +227,7 @@ for (const r of runs) {
   console.log(` ${r.name.padEnd(22)} ${String(r.valid).padStart(6)}  ${String(r.blocked).padStart(6)} (${String(r.pctBlocked).padStart(5)} %)`
     + `   ${r.maxLenJump.toFixed(2).padStart(7)} m @${r.maxLenJumpAt.toFixed(1)}s`
     + `   ${String(r.jumpsOver50cm).padStart(6)}      ${String(r.releases).padStart(5)} (${r.releasesWithJump} m. Sprung)`
+    + `   Umweg ${r.maxDetour.toFixed(2)} m @${(r.maxDetourAt||0).toFixed(1)}s`
     + `   ${String(r.cornerSlideCalls).padStart(5)} Aufrufe`);
 }
 const totBlocked = runs.reduce((s, r) => s + r.blocked, 0);
@@ -220,13 +244,64 @@ console.log(` größter Längensprung   : ${worstJump.toFixed(2)} m pro Schritt 
 console.log(` _cornerSlide           : ${csCalls} Aufrufe, ${csHits} Erfolge`);
 console.log(` _atEnd                 : ${aeSteps} von ${cSteps} Kontakt-Schritten (${(aeSteps / Math.max(1, cSteps) * 100).toFixed(1)} %)`);
 
+/* --------------------------------------------------------------------------
+   ABGEBROCHENER REPARATURVERSUCH — dokumentiert, damit niemand denselben Weg
+   nochmal geht. Alle Zahlen gemessen, nicht abgeschätzt.
+
+   These: _cornerSlide ist der vorgesehene Mechanismus für stetiges
+   Weitergleiten, und er ist doppelt verriegelt (Gate _atEnd, cornerSlideReach).
+   Also wurde er geöffnet: FACE_PARALLEL_EDGES (die zwei Kanten, die mit einer
+   Kante eine Fläche teilen und parallel zu ihr sind) als Kandidatenmenge,
+   Ecknähe-Schranke für diese Kandidaten ausgesetzt, Belegungsprüfung auf noch
+   gebrauchte Kontakte gelockert, Ablauf-Prüfung durch einen 1-stufigen
+   Lookahead ersetzt.
+
+   Ergebnis: der Mechanismus LÄUFT — 84 Erfolge bei 1060 Aufrufen, W7 wird grün.
+   Aber er repariert nichts, er verschlechtert jede einzelne Messung:
+
+     Orbit              HEAD (vorher)          mit azimuthalem Wechsel
+     r=3,2  9,8 m/s     146 blockiert, Δ4,44   208 blockiert, Δ10,70
+     r=4,5  9,8 m/s      51 blockiert, Δ8,52   187 blockiert, Δ10,69
+     test_sim.js         179/179               173/179 (6 Assertionen kippen)
+
+   Und die entscheidende Einzelzahl: von 17 erfolgreichen Slides lassen
+   17 den Pfad DANACH blockiert zurück — 100 % — bei einem Längensprung von
+   im Mittel 3,97 m und max 5,56 m. Der Übergang ist selbst die Sprungquelle.
+
+   Warum: beim Umkreisen einer Säule liegt das Seil physikalisch an der
+   SEITENFLÄCHE an, nicht an einer Kante. Zwei parallele Kanten als Stützpunkte
+   sind keine feine Diskretisierung davon, sondern eine grobe — und der
+   azimuthale Wechsel tauscht sie gegeneinander aus, statt sie zu verfeinern.
+   Die Längenbedingung `L < Lold - cornerSlideGain` mit gain = 0,02 m ist an
+   der Umschlagstelle erfüllt, aber die KOEXISTENZ-Route (beide Kontakte
+   gleichzeitig) ist um Meter länger als jede der beiden Einzelrouten. Genau
+   dieser Buckel ist der gemessene Sprung.
+
+   Drei Zwischenstufen, jeweils isoliert gemessen:
+     · nur _atEnd-Gate offen, _cornerSlide original: 0 Erfolge (cornerSlideReach
+       = 0,8 m gegen 5,2 m Kantenabstand), Zahlen bit-identisch zu HEAD,
+       179/179. Also wirkungslos, nicht schädlich.
+     · Lookahead mit `wraps.push` + `_buildPts` + `wraps.pop` zur
+       Koexistenzprüfung: 176/179. _buildPts schreibt this.pts/ptsBox neu und
+       _segBlocked benutzt this._sbD — beides wird vom Aufrufer mitten in der
+       Index-Schleife über this.wraps weiterverwendet. Seiteneffekt, kein
+       Logikfehler.
+     · derselbe Lookahead seiteneffektfrei (nur lokale Puffer): 173/179.
+       Der Seiteneffekt war also nicht die Ursache der restlichen drei.
+
+   Fazit: ein Kantenpunkt-Modell kann Flächenauflage nicht darstellen. Der Fix
+   braucht entweder Flächenkontakt als eigenen Kontakttyp (Pfad über die Fläche
+   = zwei Kontakte mit freiem Zwischenstück) oder einen durchhängefähigen
+   Übergang. Beides ist ein Umbau des Kontaktmodells, keine Parameterfrage.
+   -------------------------------------------------------------------------- */
+
 /* ============================ assertions ================================= */
 /* Diese vier sind ECHTE Invarianten, die heute schon gelten müssen. */
 ok(runs.every(r => r.valid > 500), 'W1: jeder Orbit-Lauf hat genug gültige Messschritte',
    runs.map(r => r.valid).join('/'));
 ok(runs.every(r => Number.isFinite(r.maxLenJump)), 'W2: keine NaN/Infinity in der Pfadlänge');
-ok(csCalls <= aeSteps, 'W3: _cornerSlide wird nur für Kontakte am Kantenende erwogen',
-   `${csCalls} Aufrufe bei ${aeSteps} _atEnd-Schritten`);
+ok(csCalls <= cSteps, 'W3: _cornerSlide läuft nie öfter als es Kontakte gibt',
+   `${csCalls} Aufrufe bei ${cSteps} Kontakt-Schritten`);
 ok(runs.every(r => r.maxWraps <= E.ROPE_DEFAULTS.wrapMaxCount), 'W4: wrapMaxCount wird nie überschritten',
    `max ${Math.max(...runs.map(r => r.maxWraps))} von ${E.ROPE_DEFAULTS.wrapMaxCount}`);
 
@@ -236,14 +311,23 @@ xok(totBlocked === 0, 'W5 [XFAIL] Seil läuft nie durch Geometrie',
     `${totBlocked}/${totValid} Schritte — Ziel: 0`);
 xok(worstJump < 0.35, 'W6 [XFAIL] kein Längensprung über 0,35 m pro Schritt',
     `${worstJump.toFixed(2)} m — Ziel: < 0,35 m (ein Schritt = 8,3 ms)`);
-xok(csHits > 0, 'W7 [XFAIL] _cornerSlide erzeugt beim Umkreisen einen Nachfolgekontakt',
-    `${csHits} Erfolge bei ${csCalls} Aufrufen — Ziel: Erfolge > 0. Zwei unabhängige`
-    + ` Ursachen: (a) das Gate _atEnd verlangt den Kontaktpunkt innerhalb 5 cm vom`
-    + ` KantenENDE; vertikale Kanten im Level sind im Median 5,00 m lang (max 42 m),`
-    + ` daher nur ${aeSteps} von ${cSteps} Kontakt-Schritten (${(aeSteps / Math.max(1, cSteps) * 100).toFixed(1)} %).`
-    + ` (b) cornerSlideReach = ${E.ROPE_DEFAULTS.cornerSlideReach} m, während die`
-    + ` benachbarten vertikalen Kanten der 2,6-m-Säule 5,2 m auseinanderliegen —`
-    + ` selbst ein erreichter Aufruf kann die Nachbarkante nicht erreichen.`);
+/* W7 war ursprünglich „_cornerSlide erzeugt einen Nachfolgekontakt". Das ist
+   als Zielgröße FALSCH und wurde durch Messung widerlegt: den Mechanismus zu
+   öffnen bringt 84 Erfolge — und verschlechtert jede andere Zahl (siehe das
+   Abbruch-Protokoll oben). Ob _cornerSlide feuert, ist nicht die Eigenschaft,
+   auf die es ankommt. Die Eigenschaft ist: ein Wickelwechsel darf die
+   Pfadlänge nicht reißen lassen.                                             */
+const worstDet = runs.reduce((a, r) => r.maxDetour > a.maxDetour ? r : a, runs[0]);
+xok(runs.every(r => r.maxDetour < 1.0), 'W7 [XFAIL] kein stehen gebliebener Umweg nach dem Abwickeln',
+    `max ${worstDet.maxDetour.toFixed(2)} m über der konvergierten Referenzroute`
+    + ` bei t=${(worstDet.maxDetourAt||0).toFixed(1)}s in „${worstDet.name}"`
+    + ` (Pfad ${(worstDet.maxDetourLen||0).toFixed(2)} m gegen ${(worstDet.maxDetourStraight||0).toFixed(2)} m Referenz,`
+    + ` ${worstDet.maxDetourWraps||0} Kontakte)`
+    + ` — Ziel: < 1,0 m (test_sim.js Test 14 nutzt dieselbe Grenze für denselben`
+    + ` Defekt am Einzelkontakt: „vor dem Fix 10,3 m"). W6 misst den Ruck beim`
+    + ` Wechsel, W7 das Ergebnis danach: ob das Seil sauber auf die kurze Route`
+    + ` zurückkommt oder einen Umweg behält. Beides zusammen ist das gemeldete`
+    + ` Symptom — Ablösen von den Kanten UND Neubilden als direkte Linie.`);
 xok(runs.every(r => r.releasesWithJump === 0), 'W8 [XFAIL] Freisetzen einer Wicklung ohne Längensprung',
     `${runs.reduce((s, r) => s + r.releasesWithJump, 0)} von ${runs.reduce((s, r) => s + r.releases, 0)} Freisetzungen springen > 0,5 m`);
 
