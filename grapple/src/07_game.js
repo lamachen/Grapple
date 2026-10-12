@@ -48,8 +48,8 @@ class Game {
     this.input = { forward:false, back:false, left:false, right:false, slide:false, slideHeld:false,
                    jumpPressed:false, firePressed:false, releasePressed:false, fireHeld:false,
                    mouseX:0, mouseY:0, reelDir:0 };
-    this.sens = 0.0021;
-    this.freeLookSensScale = 2.1;   // Multiplikator, wenn der Zeiger nicht gesperrt ist
+    this.sens = 0.0015;
+    this.freeLookSensScale = 1.7;   // Multiplikator, wenn der Zeiger nicht gesperrt ist
     this.locked = false;
     this.freeLook = false;   // Fallback, wenn Pointer-Lock nicht erlaubt ist (z. B. Sandbox-iframe)
     this.dragLook = false;   // Taste gehalten + ziehen (Touchpad-freundlich)
@@ -339,7 +339,7 @@ class Game {
     const h = 1/this.PHYS_HZ;
     let steps = 0;
     const t0 = performance.now();
-    while (this.acc >= h && steps < 8) { this.physics(h, steps === 0); this.acc -= h; steps++; }
+    while (this.acc >= h && steps < 8) { this._snapshotPrev(); this.physics(h, steps === 0); this.acc -= h; steps++; }
     if (steps >= 8) this.acc = 0;
     this.substeps = steps;
     this.perf.phys = performance.now() - t0;
@@ -351,9 +351,75 @@ class Game {
     // fireHeld bleibt, bis die Taste wirklich losgelassen wird
 
     this.particles.step(dt, this.world.gravity*0.42);
-    this.updateCamera(dt);
-    this.render(dt);
+    this._applyInterp(this.acc / h);
+    try { this.updateCamera(dt); this.render(dt); }
+    finally { this._restoreInterp(); }   // sonst bleibt der Zustand interpoliert
     this.updateHUD(dt);
+  }
+
+
+  /** Seil-Austritt (rechts/unten vor der Kamera). EINE Quelle für Ketten-Pin (Physik)
+      UND Darstellung — vorher: Pin = handPoint (0.59 m vom Auge), Render = 0.36 m vom Auge,
+      0.29 m Versatz ⇒ kurzes, fast achsparalleles Verbindungsstück = „dicker Schlauch". */
+  ropeOriginPoint(o, useCam) {
+    const P = this.player, R = this.rope;
+    const eye = (useCam && this._camEye) ? this._camEye : P.eyePoint(this._eye || (this._eye = v3()));
+    const q = (useCam && this.camQuat) ? this.camQuat : (this._oq || (this._oq = [0,0,0,1]));
+    if (!(useCam && this.camQuat)) { qFromYawPitch(q, P.yaw, P.pitch); qRotateLocal(q, q, 0, 0, 1, P.roll*0.055); }
+    const fwd = qForward(this._vmF || (this._vmF = v3()), q);
+    const right = qRight(this._vmR || (this._vmR = v3()), q);
+    const up = qUp(this._vmU || (this._vmU = v3()), q);
+    o[0] = eye[0] + right[0]*0.155 + fwd[0]*0.30 - up[0]*0.125;
+    o[1] = eye[1] + right[1]*0.155 + fwd[1]*0.30 - up[1]*0.125;
+    o[2] = eye[2] + right[2]*0.155 + fwd[2]*0.30 - up[2]*0.125;
+    if (R.phase !== 0) {
+      const tgt = R.phase === 1 ? R.farEndRef() : R.anchor;
+      const d = vnormSafe(vsubNew(tgt, eye), fwd[0], fwd[1], fwd[2]);
+      o[0] += (d[0]-fwd[0])*0.16; o[1] += (d[1]-fwd[1])*0.16; o[2] += (d[2]-fwd[2])*0.16;
+      const ox = o[0]-eye[0], oy = o[1]-eye[1], oz = o[2]-eye[2];
+      const sc = 0.3617 / (Math.sqrt(ox*ox+oy*oy+oz*oz) || 1e-6);
+      o[0] = eye[0]+ox*sc; o[1] = eye[1]+oy*sc; o[2] = eye[2]+oz*sc;
+    }
+    return o;
+  }
+
+  /* ---- Render-Interpolation: Physik 120 Hz fix, Darstellung mit alpha = acc/h ---- */
+  _interpTargets() {
+    const P = this.player, R = this.rope, H = this.hook, C = R.chain, t = this._itT || (this._itT = []);
+    t.length = 0;
+    const add = (v) => { if (v && t.indexOf(v) < 0) t.push(v); };
+    /* `this._hand` statt `R.visualHand`: visualHand wechselt seine Identität
+       zwischen Physik (=_hand) und Render (=_ropeOrigin). Je nach Substep-Zahl
+       wäre sonst der Snapshot-Slot ein ANDERES Objekt als der Apply-Slot. */
+    add(P.pos); add(R.hand); add(this._hand); add(H.pos);
+    if (C && C.pos) for (let i = 0; i < C.n; i++) add(C.pos[i]);
+    for (const b of this.world.bodies) add(b.pos);
+    return t;
+  }
+  _snapshotPrev() {
+    const t = this._interpTargets(), a = this._itPrev || (this._itPrev = []);
+    a.length = t.length * 3;
+    for (let i = 0; i < t.length; i++) { a[i*3] = t[i][0]; a[i*3+1] = t[i][1]; a[i*3+2] = t[i][2]; }
+  }
+  _applyInterp(alpha) {
+    const t = this._interpTargets(), a = this._itPrev, cur = this._itCur || (this._itCur = []);
+    this._itApplied = false;
+    if (!a || a.length !== t.length*3 || alpha >= 1) return;           // Topologie geändert → nicht mischen
+    cur.length = t.length * 3;
+    for (let i = 0; i < t.length; i++) {
+      const v = t[i];
+      const dx = v[0]-a[i*3], dy = v[1]-a[i*3+1], dz = v[2]-a[i*3+2];
+      cur[i*3] = v[0]; cur[i*3+1] = v[1]; cur[i*3+2] = v[2];
+      if (dx*dx+dy*dy+dz*dz > 4) continue;                              // Teleport (Respawn): nie interpolieren
+      v[0] = a[i*3] + dx*alpha; v[1] = a[i*3+1] + dy*alpha; v[2] = a[i*3+2] + dz*alpha;
+    }
+    this._itApplied = true; this._itTargets = t.slice();
+  }
+  _restoreInterp() {
+    if (!this._itApplied) return;
+    const t = this._itTargets, cur = this._itCur;
+    for (let i = 0; i < t.length; i++) { t[i][0] = cur[i*3]; t[i][1] = cur[i*3+1]; t[i][2] = cur[i*3+2]; }
+    this._itApplied = false;
   }
 
   /* ------------------------------- Physik -------------------------------- */
@@ -387,7 +453,8 @@ class Game {
     W.stepBodies(dt);
 
     // 2) Haken (ballistisches Projektil)
-    const hand = P.handPoint(this._hand || (this._hand = v3()), R);
+    const hand = this.orbit ? P.handPoint(this._hand || (this._hand = v3()), R)
+                            : this.ropeOriginPoint(this._hand || (this._hand = v3()), false);
     if (H.state !== 'idle') {
       const ev = H.step(dt, R, R.phase === 1 ? P.chestPoint(this._chest || (this._chest = v3())) : hand);
       if (ev) this.onHookEvent(ev);
@@ -477,36 +544,7 @@ class Game {
     r.begin();
     r.drawSky();
 
-    // Seil-Ursprung: fester Punkt rechts/unten vor der Kamera, mit leichtem
-    // Mitneigen zum Seil. Nicht bildmittig (sähe aus wie aus dem Auge kommend),
-    // und nicht starr am Anker ausgerichtet (sonst wandert der Ursprung beim
-    // Umschauen hektisch durchs Bild).
-    if (!this.orbit) {
-      const eye = this._camEye || P.eyePoint(this._eye || (this._eye = v3()));
-      const q = this.camQuat || P.quat;
-      const fwd = qForward(this._vmF || (this._vmF = v3()), q);
-      const right = qRight(this._vmR || (this._vmR = v3()), q);
-      const up = qUp(this._vmU || (this._vmU = v3()), q);
-      if (!this._ropeOrigin) this._ropeOrigin = v3();
-      const o = this._ropeOrigin;
-      o[0] = eye[0] + right[0]*0.155 + fwd[0]*0.30 - up[0]*0.125;
-      o[1] = eye[1] + right[1]*0.155 + fwd[1]*0.30 - up[1]*0.125;
-      o[2] = eye[2] + right[2]*0.155 + fwd[2]*0.30 - up[2]*0.125;
-      if (R.phase !== 0) {
-        const tgt = R.phase === 1 ? R.farEndRef() : R.anchor;
-        const d = vnormSafe(vsubNew(tgt, eye), fwd[0], fwd[1], fwd[2]);
-        o[0] += (d[0]-fwd[0])*0.16; o[1] += (d[1]-fwd[1])*0.16; o[2] += (d[2]-fwd[2])*0.16;
-        // Offset auf konstante Länge zurücknormieren: der Ursprung darf sich
-        // nur WENDEBN, nicht in der Distanz zur Kamera wandern — sonst springt
-        // das Seil beim Anvisieren weit oben/unten sichtbar hin und her.
-        let ox = o[0]-eye[0], oy = o[1]-eye[1], oz = o[2]-eye[2];
-        const l = Math.sqrt(ox*ox+oy*oy+oz*oz) || 1e-6;
-        const want = 0.3617;   // |(0.155, 0.30, -0.125)|
-        const sc2 = want/l;
-        o[0] = eye[0]+ox*sc2; o[1] = eye[1]+oy*sc2; o[2] = eye[2]+oz*sc2;
-      }
-      R.visualHand = o;
-    }
+    if (!this.orbit) R.visualHand = this.ropeOriginPoint(this._ropeOrigin || (this._ropeOrigin = v3()), true);
 
     /* Welt */
     for (const b of W.statics) r.pushAABB(b, b.color, 0.22);
@@ -604,7 +642,10 @@ class Game {
       const px = buf[i*3], py = buf[i*3+1], pz = buf[i*3+2];
       const d = Math.sqrt((px-cam[0])**2 + (py-cam[1])**2 + (pz-cam[2])**2);
       // Mindestbreite in Bildschirmpixelnähe → kein Flackern bei Distanz
-      return Math.max(0.052 + 0.022*tl, Math.max(0.02, d*0.0022)) * (u > 0.965 ? 1.5 : 1.0);
+      const base = Math.max(0.052 + 0.022*tl, Math.max(0.02, d*0.0022)) * (u > 0.965 ? 1.5 : 1.0);
+      // Nahfeld: ein 5-cm-Band in 0.4 m Abstand füllt ~8 % der Bildhöhe → zur Kamera hin verjüngen
+      const near = Math.min(1, Math.max(0, (d - 0.30) / 1.4));
+      return base * (0.25 + 0.75*near*near*(3 - 2*near));
     };
     const tensionFn = (u, i) => tl;
     r.rope(buf, total, widthFn, tensionFn);   // Kollisionsgarantie liegt in buildRenderCurve()
