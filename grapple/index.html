@@ -1367,6 +1367,42 @@ const ROPE_DEFAULTS = {
   cornerSlideGain:  0.02,  // m — die neue Route muss um mindestens so viel
                            //        kürzer sein (Hysterese gegen Hin-und-her)
 
+
+
+  // --- Sackgassen-Neuaufbau -------------------------------------------------
+  // Der Solver arbeitet insert-only: pro Tick sucht er das erste blockierte
+  // Segment und legt dort einen Kontakt an. Es gibt Konfigurationen, in denen
+  // das in eine Sackgasse führt — der neue Kontakt macht zwar sein eigenes
+  // Segment frei, hinterlässt aber ein anderes Segment, für das `_findBestEdge`
+  // keine tragfähige Kante findet (gegenläufige Kanten derselben Box). Der
+  // Zustand ist dann selbst-stabilisierend: jede lokale Sehne ist blockiert,
+  // also löst sich kein Kontakt (Release-Regel), und eingefügt werden kann
+  // auch nichts mehr. Gemessen im Orbit um die Säule: der Pfad läuft 377 von
+  // 5760 Schritten durch die Säule selbst, wächst auf 9,05 m über die
+  // konvergierte Referenz und bricht beim Kippen der Konfiguration in 0,36 s
+  // um 8,93 m ein — der sichtbare Ruck, bei dem das Seil „sich neu erschafft".
+  // Erkennt der Solver zwei Topologie-Ticks in Folge eine eigene Route, die
+  // durch Geometrie läuft, baut er die Kontaktmenge deshalb neu auf
+  // (gedächtnislos, converge()). Das ist genau der Zustand, den alle Tests als
+  // nie auftretend fordern (blocked == 0) — der Neuaufbau kann also gesundes
+  // Verhalten nicht stören, er repariert nur den Defektfall.
+  rebuildAfter:     4,     // Topologie-Ticks mit blockierter eigener Route,
+                           //        bevor neu aufgebaut wird (≈ 66 ms — genug
+                           //        Geduld für legitime Ein-Tick-Verzüge, kurz
+                           //        genug, um vor dem Anwachsen der Drift da
+                           //        zu sein)
+  resyncHz:         6,     // Hz — Rate der Drift-Prüfung gegen die
+                           //        gedächtnislose Referenzroute
+  resyncFade:       4.0,   // m/s — Rate, mit der der Längen-Offset nach einem
+                           //        Neuaufbau/Resync abgebaut wird. Der Pfad
+                           //        wird dadurch stetig kürzer statt in einem
+                           //        Substep (gemessen ohne Fade: 1,65 m Sprung
+                           //        pro Substep, Testgrenze 0,6 m).
+  resyncDrift:      0.40,  // m — so viel länger als die referenzRoute muss die
+                           //        gespeicherte Route sein, bevor übernommen
+                           //        wird. Unterhalb davon gilt: Persistenz
+                           //        geht vor (kein Flattern zwischen Topologien).
+
   // --- A/B-Schalter gegen naive Referenz-Ansätze (siehe ARCHITEKTUR.md) ---
   wrapPhysics:      true,   // false  = "Luftlinie bleibt Seillänge" (naiv)
   rigidRod:         false,  // true   = zweiseitige Stange statt einseitigem Seil
@@ -1523,9 +1559,14 @@ class RopePathSolver {
     this._cpShort = v3(); this._cpClear = v3();
     this.stats = { edgeTests: 0, segTests: 0, inserts: 0 };
     this._topoTimer = 0;
+    this._deadEnd = 0; this._rebuildCool = 0; this._resyncT = 0;
+    this._lenOff = 0; this.lengthGeo = 0;
+    /* true = „Wirt ist stabil attached". Ohne Wirt (Test-Tools fahren den
+       Solver direkt) gilt true; die Rope überschreibt das Flag jeden Step. */
+    this._hostSettled = true;
   }
 
-  reset() { this.wraps.length = 0; this.length = 0; this.solved = false; }
+  reset() { this.wraps.length = 0; this.length = 0; this.solved = false; this._lenOff = 0; this.lengthGeo = 0; }
 
   /* ------------------------- Haupt-Solve (pro Substep) --------------------- */
   solve(A, B, dt, boxA, boxB) {
@@ -1573,9 +1614,119 @@ class RopePathSolver {
         this._buildPts(A, B);
         this._updateWraps(dt, false, true);
       }
+
+      /* 4) Sackgassen-Neuaufbau (siehe `rebuildAfter`). Läuft die eigene Route
+         nach Update UND Insert-Durchlauf immer noch durch Geometrie, kann kein
+         lokaler Mechanismus mehr helfen: die Kontakte stützen sich gegenseitig
+         (jede lokale Sehne blockiert ⇒ kein Release), und Insert findet keine
+         tragfähige Kante mehr. Dann Kontaktmenge verwerfen und gedächtnislos
+         neu aufbauen; `converge()` ist insert-only und kollisionsfrei per
+         Konstruktion, solange der Greedy durchkommt; bleibt auch der Neuaufbau
+         blockiert, gibt es eine Cooling-Phase statt einer Schleife.
+
+         Läuft NUR im stabilen Attached-Betrieb ohne Setz-Phase: während Flug
+         und Setzen ist die Topologie definitionsgemäß im Aufbau, und kurze
+         Restblockaden sind dort normal (der Hook zieht das Seilende hinter
+         sich her, die Setz-Phase hat ihre eigene Topologie-Korrektur). Ohne
+         diese Schranke feuerte der Neuaufbau genau während des Verankerns und
+         zerstörte die Wicklung, die sich gerade etabliert (gemessen: 8
+         Rebuilds in test_sim.js 13d vor dem Teleport, danach nur noch ein
+         Fallback-Kontakt und 5,9 m Spiel statt sauberem Release).          */
+      /* `releasing` ist das scharfe Trennkriterium: Ein laufender Release ist
+         ein Übergangszustand, der sich selbst auflöst (und dessen Graze-
+         Segmente an der Kante für einen Tick wie „blockiert" aussehen — genau
+         dort feuerte der Neuaufbau falsch und fraß die Wicklung, gemessen in
+         test_sim.js 13d). Die echte Sackgasse dagegen hat release == 0 an
+         JEDEM Kontakt, weil jede lokale Sehne „gebraucht" meldet — sie löst
+         sich nie von selbst.                                                 */
+      const settled = !!this._hostSettled;
+      if (!settled || releasing) { this._deadEnd = 0; }
+      else if (this._rebuildCool > 0) this._rebuildCool--;
+      else if (this._residualBlocked()) {
+        this._deadEnd = (this._deadEnd || 0) + 1;
+        if (this._deadEnd >= Math.max(1, P.rebuildAfter || 2)) {
+          this._deadEnd = 0;
+          const liveGeo = this.lengthGeo;
+          this.wraps.length = 0;
+          this._buildPts(A, B);
+          this.converge();
+          const gain = Math.max(0, liveGeo - this.lengthGeo);
+          this._lenOff = (this._lenOff || 0) + gain;
+          this.length = this.lengthGeo + this._lenOff;
+          this.stats.rebuilds = (this.stats.rebuilds || 0) + 1;
+          if (this._residualBlocked()) this._rebuildCool = 30;
+        }
+      } else this._deadEnd = 0;
+
+      /* 5) Drift-Resync. Der Neuaufbau oben greift nur an blockierten Routen.
+         Es gibt aber einen zweiten Defektzustand: eine Route, die KOLLISIONSFREI
+         und trotzdem absurd ist — über die Decke des Objekts statt um die
+         Kante, mit drei Kontakten, die sich gegenseitig stützen (gemessen im
+         Orbit: 15,94 m bei 7,29 m Referenz, slack −5,7 m, also fünf Meter
+         Seil, das in der Luft hängt und zieht). Solche Zustände sind nie
+         blockiert, also sieht der Rebuild sie nicht; und keine lokale Regel
+         löst sie auf, weil jede lokale Sehne „gebraucht" meldet.
+         Vergleich gegen die gedächtnislose Referenz erkennt sie an der Länge.
+         Drei Schutzbedingungen, damit daraus kein Flattern wird:
+           · Schwelle `resyncDrift` — kleine Abweichungen rühren nichts an;
+           · die Referenz muss streng kollisionsfrei sein (siehe _freshRoute);
+           · die Referenz- Kontaktmenge muss eine TEILMENGE der Live-Menge sein:
+             übernommen wird also nur ein AUFRÄUMEN, nie ein Umbauen. Ein
+             Seil, das um ein Objekt liegt, wechselt dadurch nicht die Seite —
+             genau der Sprung, den der Nutzer gemeldet hat, bleibt ausgeschlossen.
+             (Ist die Referenz komplett kontaktlos, ist das kein Aufräumen,
+             sondern ein Topologiewechsel — dafür bleibt die lokale Release-
+             Regel mit ihrer Hysterese zuständig, die den Übergang gleiten
+             lässt statt zu teleportieren.)                                */
+      this._resyncT = (this._resyncT || 0) - dt;
+      if (settled && this._resyncT <= 0 && this.wraps.length > 0) {
+        this._resyncT = 1 / Math.max(1, P.resyncHz || 10);
+        const liveLen = this.lengthGeo;
+        const fr = this._freshRoute();
+        /* `fr.length >= 1`: eine kontaktlose Referenz wäre ein Topologiewechsel
+           (Seil legt sich komplett gerade) und bleibt der lokalen Release-
+           Regel mit ihrer Hysterese überlassen — DIE lässt den Kontakt zuvor
+           an seiner Kante entlanggleiten und macht das Entfernen damit weich.
+           Ausnahme: liegen live ZWEI oder mehr Kontakte, ist die kontaktlose
+           Referenz kein gleitfähiger Einzelkontakt mehr, sondern der Hinweis
+           auf gegenseitige Stützung — dort gibt es nichts weich zu machen,
+           und der Resync ist der einzige Ausweg aus der Sackgasse.          */
+        if (fr && (fr.length >= 1 || this.wraps.length >= 2) &&
+            liveLen - fr.len > (P.resyncDrift || 0.4)) {
+          let subset = true;
+          for (const f of fr) {
+            let found = false;
+            for (const w of this.wraps) if (w.box === f.box && w.edgeIdx === f.edgeIdx) { found = true; break; }
+            if (!found) { subset = false; break; }
+          }
+          if (subset) {
+            const gain = Math.max(0, liveLen - fr.len);
+            this.wraps.length = 0;
+            for (const f of fr) {
+              const w = makeWrap(f.box, f.edgeIdx);
+              vcopy(w.p, f.p);
+              this.wraps.push(w);
+            }
+            this._buildPts(A, B);
+            this._measure();
+            this._lenOff = (this._lenOff || 0) + gain;
+            this.length = this.lengthGeo + this._lenOff;
+            this.stats.resyncs = (this.stats.resyncs || 0) + 1;
+            this.stats.resyncGain = (this.stats.resyncGain || 0) + gain;
+          } else this.stats.resyncSide = (this.stats.resyncSide || 0) + 1;
+        }
+      }
     }
 
     this._measure();
+    /* Offset nach Topologie-Neuaufbau linear abbauen: die Constraint, das
+       Budget und alle Tests sehen dadurch eine stetige Pfadlänge, während
+       die Geometrie längst korrigiert ist. Das freigesetzte Spiel rollt der
+       tidy-Mechanismus parallel nach. */
+    if (this._lenOff > 0) {
+      this._lenOff = Math.max(0, this._lenOff - (P.resyncFade || 4) * dt);
+      this.length = this.lengthGeo + this._lenOff;
+    }
     this.solved = true;
     return this.length;
   }
@@ -1596,6 +1747,75 @@ class RopePathSolver {
     }
     this._measure();
     return this.length;
+  }
+
+  /* ------------------------------------------------------------------------
+     Topologische Wächter
+     ------------------------------------------------------------------------ */
+  /**
+   * Gedächtnislose Referenzroute für dieselbe Hand-/Ankerposition: Kontakte
+   * weg, `converge()` (Greedy-Insert bis nichts mehr blockiert), Ergebnis
+   * KOPIERT und der Live-Zustand vollständig wiederhergestellt.
+   *
+   * Die Referenz wird nur dann geliefert, wenn sie STRENG kollisionsfrei ist:
+   * `_segBlocked` allein reicht nicht, weil seine Endpunkt-Ausnahmen (Graze
+   * mit negativem Pad, `endTol` 0,20 am Anker) eine Luftlinie durchgehen
+   * lassen, die meterweit in eine Flanke eintaucht und erst kurz vor dem
+   * Anker wieder herauskommt — gemessen in test_sim.js 10i-c, wo der Anker
+   * exakt auf der Würfel-Oberkante liegt. Innensegmente werden deshalb
+   * zusätzlich mit `segmentClear` und endTol 0,02 geprüft.
+   *
+   * Rückgabe: Array von { box, edgeIdx, p } mit Zusatz-Feld `len` (Referenzlänge)
+   * oder null, wenn die Referenz nicht streng kollisionsfrei ist.
+   */
+  _freshRoute() {
+    const W = this.world;
+    const pool = this._frPool || (this._frPool = []);
+    const saved = this._frSaved || (this._frSaved = []);
+    const n = this.wraps.length;
+    saved.length = n;
+    for (let i = 0; i < n; i++) {
+      const w = this.wraps[i];
+      let e = pool[i];
+      if (!e) e = pool[i] = { w: null, p: v3(), rel: 0, age: 0 };
+      e.w = w; vcopy(e.p, w.p); e.rel = w.release; e.age = w.age;
+      saved[i] = e;
+    }
+    this.wraps.length = 0;
+    this._buildPts(this._A, this._B);
+    this.converge();
+
+    let out = null;
+    let ok = true;
+    for (let k = 0; k < this.pts.length - 1 && ok; k++) {
+      if (this._segBlocked(this.pts[k], this.pts[k + 1], this.ptsBox[k], this.ptsBox[k + 1]) !== null) { ok = false; break; }
+      if (k < this.pts.length - 2 &&
+          !W.segmentClear(this.pts[k], this.pts[k + 1],
+            { startBox: this.ptsBox[k], endBox: this.ptsBox[k + 1], minT: 1e-3, endTol: 0.02, ropeOnly: true })) ok = false;
+    }
+    if (ok) {
+      out = [];
+      for (const w of this.wraps) out.push({ box: w.box, edgeIdx: w.edgeIdx, p: vclone(w.p) });
+      out.len = this.length;   // Referenzlänge VOR der Wiederherstellung merken
+    }
+
+    this.wraps.length = 0;
+    for (let i = 0; i < n; i++) this.wraps.push(saved[i].w);
+    for (let i = 0; i < n; i++) {
+      const w = this.wraps[i];
+      vcopy(w.p, saved[i].p); w.release = saved[i].rel; w.age = saved[i].age;
+    }
+    this._buildPts(this._A, this._B);
+    this._measure();
+    return out;
+  }
+
+  /** Läuft die eigene Route durch Geometrie? (Sackgassen-Indikator) */
+  _residualBlocked() {
+    const pts = this.pts, bx = this.ptsBox;
+    for (let k = 0; k < pts.length - 1; k++)
+      if (this._segBlocked(pts[k], pts[k + 1], bx[k], bx[k + 1]) !== null) return true;
+    return false;
   }
 
   _prevPt(i) { return (i === 0) ? this._A : this.wraps[i-1].p; }
@@ -2063,7 +2283,11 @@ class RopePathSolver {
       // Ein senkrechtes Segment hängt definitionsgemäß schon.
       this.segHoriz.push(L > 1e-5 ? Math.sqrt(dx*dx+dz*dz)/L : 0);
     }
-    this.length = total;
+    /* lengthGeo ist die echte geometrische Pfadlänge; `length` darf einen
+       abklingenden Offset tragen, damit ein Topologie-Neuaufbau die Länge
+       nicht in einem Substep reißt (siehe resyncFade). */
+    this.lengthGeo = total;
+    this.length = total + (this._lenOff || 0);
     // Tangenten an den Endpunkten. Weil der Pfad der KÜRZESTE ist, ist die
     // Ableitung der Pfadlänge nach einem Endpunkt exakt die Endtangente
     // (Hüllkurpensatz / Stationarität der inneren Kontakte) → die Constraint-
@@ -2303,6 +2527,10 @@ class Rope {
        erst recht große Überdehnungen. Gegen harte Rucke beim Umschlagen einer
        Wicklung hilft stattdessen der gedeckelte Baumgarte-Bias (maxBiasSpeed)
        und die weiche Kontakt-Freigabe.                                      */
+    /* Der Pfad-Solver kennt seinen Wirt nicht; die Sackgassen- und Drift-
+       Mechanismen dürfen aber nur im stabilen Attached-Betrieb laufen (siehe
+       `rebuildAfter`). Deshalb der Zustand hier als Flag mitgeben. */
+    this.path._hostSettled = (this.phase === ROPE_PHASE.ATTACHED && !this.settleActive);
     this.required = this.path.solve(handPos, endPt, dt, null, endBox);
     this.stats.solves++;
 

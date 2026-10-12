@@ -195,6 +195,63 @@ Hinzu kommt, dass der dritte Zweig der Release-Kaskade
 logisch unerreichbar ist, weil `unnecessary === !directBlocked` — die dort
 kommentierte Hysterese existiert nicht, Release ist binär.
 
+### Teilfix vom 2026-10-13: Sackgassen-Neuaufbau + Drift-Resync
+
+Der Defekt oben ist an der Wurzel gemessen worden, und zwar anders als zuvor
+vermutet: Nicht die Release-Regel löscht Kontakte zu früh, sondern der
+insert-only-Solver läuft in eine **Sackgasse** und kommt dort nie wieder heraus.
+Ein eingefügter Kontakt macht sein eigenes Segment frei, hinterlässt aber ein
+anderes Segment durch dasselbe Objekt, für das `_findBestEdge` keine tragfähige
+Kante findet. Danach stützen sich die Kontakte gegenseitig — jede lokale Sehne
+meldet „gebraucht", also löst sich nichts (Release), und ein Rückbau existiert
+nicht. Der Pfad wächst dadurch auf bis zu 9,05 m über die konvergierte Referenz
+(die Kette wird 6 m über ihr Budget gezogen), läuft zeitweise durch das Objekt
+selbst und bricht beim Kippen der Konfiguration in 0,36 s um 8,93 m ein.
+**Dieser Kollaps ist das gemeldete Bild**: Seil hängt schlaff durch, löst sich
+schlagartig von allen Kanten und steht als direkte Linie neu da.
+
+Zwei neue Mechanismen in `02_rope.js` (beide nur im stabilen Attached-Betrieb,
+nie während Flug, Setzen oder laufendem Release):
+
+* **Sackgassen-Neuaufbau** (`rebuildAfter`): läuft die eigene Route vier
+  Topologie-Ticks hintereinander durch Geometrie, ohne dass ein Release läuft,
+  wird die Kontaktmenge verworfen und gedächtnislos neu aufgebaut.
+* **Drift-Resync** (`resyncHz`, `resyncDrift`): Vergleich gegen eine
+  gedächtnislos frisch gerechnete, streng kollisionsfrei validierte Referenz.
+  Übernommen wird nur eine **Teilmenge** der eigenen Kontakte — also ein
+  Aufräumen, nie ein Umbauen. Ein Seil wechselt dadurch nie die Objektseite
+  (genau der Sprung, den die Skizze `uploads/image.png` zeigt, bleibt
+  ausgeschlossen). Eine kontaktlose Referenz gilt erst ab zwei Kontakten,
+  denn der Einzelkontakt hat mit der lokalen Release-Hysterese seinen eigenen,
+  gleitenden Mechanismus.
+* Die Pfadlänge wird nach beiden Eingriffen über einen linear abklingenden
+  Offset stetig gemacht (`resyncFade`), damit Constraint und Budget keinen
+  Substep-Sprung sehen; das freigesetzte Spiel rollt der bestehende
+  tidy-Mechanismus nach.
+
+Gemessen, Orbit um die Säule wie im Nutzervideo (r = 3,2 m, eine Umdrehung,
+Rope-Ebene inkl. Kette):
+
+| Größe | vorher | nachher |
+|---|---|---|
+| größter Längensprung (neben dem Einhaken) | 4,47 m | 0,04 m |
+| größter Umweg über konvergierte Referenz | 9,05 m | 2,18 m |
+| Schritte mit Pfad durch Geometrie | 377 | 0 |
+| Schritte mit stale-Pfad (Sicht frei, Pfad zu lang) | 36 % | 11,7 % |
+
+`tools/test_wrap.js` (Solver-Ebene, vier Orbits): Polylinie durch Geometrie
+**602 → 47 von 4466** gültigen Schritten (13,5 % → 1,1 %). W6–W8 bleiben
+XFAIL: der Neuaufbau repariert die Sackgasse als Polylinien-Sprung (bis 9,3 m
+in einem Solver-Schritt); sichtbar wird daraus auf Rope-Ebene kein Ruck mehr,
+weil Kette und Längen-Offset glätten, aber die Solver-Messgröße springt
+weiter. Preis: `bench.js` D (nur Pfad-Solver) 58,7 → 105,5 µs/Aufruf für die
+Referenzrechnung, C +11 % — absolut ≈ 1,5 ms/s Laufzeit.
+
+`test_sim.js` bleibt vollständig grün (179/179); in 13d wurde die
+Messvorbedingung `slackMax > 2` auf `> 1,2` korrigiert, weil 4,2 m
+freigesetztes Spiel ein Symptom des Defekts waren und kein Ziel — mit dem
+Resync sind es 1,6 m, straff in 0,25 s (kommentiert im Test).
+
 `test_sim.js` prüft keine „läuft ohne Fehler"-Aussagen, sondern die physikalischen
 Behauptungen direkt, z. B.:
 

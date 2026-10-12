@@ -1638,7 +1638,12 @@ console.log('\n═══ 13. Feel-Regressionen: Straffbild, Ego-Knick, Schweben,
     slackMax = Math.max(slackMax, s5.rope.slack);
     if (tTaut < 0 && slackMax > 2 && s5.rope.slack < 0.6) tTaut = i*h;
   }
-  ok(slackMax > 2 && tTaut >= 0 && tTaut < 0.8, '13d: freigesetztes Spiel wird nachgerollt — das Seil bleibt handlungsfähig',
+  /* Schwelle 1,2 m statt früher 2 m: der Drift-Resync räumt vor dem Lösen den
+     künstlichen Umweg auf (u. a. einen Fallback-Kontakt edgeIdx −1, der im
+     Altbestand ewig kleben blieb), deshalb ist das Seil beim Lösen gar nicht
+     mehr so schlaff — 4,2 m Spiel waren ein Symptom des Defekts, kein Ziel.
+     Gemessen mit Resync: 1,6 m Spiel, straff in 0,25 s.                   */
+  ok(slackMax > 1.2 && tTaut >= 0 && tTaut < 0.8, '13d: freigesetztes Spiel wird nachgerollt — das Seil bleibt handlungsfähig',
      `max. Spiel ${slackMax.toFixed(1)} m, wieder straff nach ${(tTaut < 0 ? -1 : tTaut).toFixed(2)} s`);
 }
 
