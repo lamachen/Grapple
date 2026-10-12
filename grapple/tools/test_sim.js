@@ -1632,19 +1632,25 @@ console.log('\n═══ 13. Feel-Regressionen: Straffbild, Ego-Knick, Schweben,
   waitAttached(s5);
   for (let i = 0; i < 96; i++) fstep(s5);
   E.vset(s5.player.pos, 13, 1.2, -42);      // westlich der Wand: freie Sicht ⇒ Wrap löst sich
-  let slackMax = 0, tTaut = -1;
+  let slackMax = 0, tTaut = -1, slackAtRelease = null, prevRelEv = 0;
   for (let i = 0; i < 150; i++) {
     fstep(s5);
     slackMax = Math.max(slackMax, s5.rope.slack);
-    if (tTaut < 0 && slackMax > 2 && s5.rope.slack < 0.6) tTaut = i*h;
+    const relEv = s5.rope.path.stats.releaseEvents || 0;
+    if (relEv > prevRelEv) { slackAtRelease = s5.rope.slack; prevRelEv = relEv; }
+    /* „Wieder straff" heißt: das FREIGESETZTE Spiel ist weg, nicht jedes Spiel.
+       Das Restspiel aus der Annäherung (Spieler wurde zum Anker hin teleport-
+       iert) ist legitimer Durchhang und muss bleiben — ein Seil, das sich
+       selbst auf straff zieht, würde bewusst abgerolltes Mausrad-Seil fressen
+       (genau das tat das alte tidy und ist seit 2026-10-13 entfernt).       */
+    if (tTaut < 0 && slackMax > 1.2 && slackAtRelease != null &&
+        s5.rope.slack < slackAtRelease + 0.4) tTaut = i*h;
   }
   /* Schwelle 1,2 m statt früher 2 m: der Drift-Resync räumt vor dem Lösen den
-     künstlichen Umweg auf (u. a. einen Fallback-Kontakt edgeIdx −1, der im
-     Altbestand ewig kleben blieb), deshalb ist das Seil beim Lösen gar nicht
-     mehr so schlaff — 4,2 m Spiel waren ein Symptom des Defekts, kein Ziel.
-     Gemessen mit Resync: 1,6 m Spiel, straff in 0,25 s.                   */
+     künstlichen Umweg auf, deshalb ist das Seil beim Lösen nicht mehr ganz so
+     schlaff — 4,2 m Spiel waren ein Symptom des Defekts, kein Ziel.        */
   ok(slackMax > 1.2 && tTaut >= 0 && tTaut < 0.8, '13d: freigesetztes Spiel wird nachgerollt — das Seil bleibt handlungsfähig',
-     `max. Spiel ${slackMax.toFixed(1)} m, wieder straff nach ${(tTaut < 0 ? -1 : tTaut).toFixed(2)} s`);
+     `max. Spiel ${slackMax.toFixed(1)} m, freigesetzte Menge wieder eingerollt nach ${(tTaut < 0 ? -1 : tTaut).toFixed(2)} s`);
 }
 
 /* ========================================================================== */

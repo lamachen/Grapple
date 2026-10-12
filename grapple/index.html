@@ -1386,11 +1386,10 @@ const ROPE_DEFAULTS = {
   // (gedächtnislos, converge()). Das ist genau der Zustand, den alle Tests als
   // nie auftretend fordern (blocked == 0) — der Neuaufbau kann also gesundes
   // Verhalten nicht stören, er repariert nur den Defektfall.
-  rebuildAfter:     4,     // Topologie-Ticks mit blockierter eigener Route,
-                           //        bevor neu aufgebaut wird (≈ 66 ms — genug
-                           //        Geduld für legitime Ein-Tick-Verzüge, kurz
-                           //        genug, um vor dem Anwachsen der Drift da
-                           //        zu sein)
+  rebuildAfter:     6,     // eingefrorene Topologie-Ticks (blockiert, kein
+                           //        Release, kein Insert, Kontakte bewegen
+                           //        sich < 2 cm) bevor neu aufgebaut wird
+                           //        (≈ 100 ms)
   resyncHz:         6,     // Hz — Rate der Drift-Prüfung gegen die
                            //        gedächtnislose Referenzroute
   resyncFade:       4.0,   // m/s — Rate, mit der der Längen-Offset nach einem
@@ -1589,7 +1588,7 @@ class RopePathSolver {
     this._lenOff = 0; this.lengthGeo = 0;
     /* true = „Wirt ist stabil attached". Ohne Wirt (Test-Tools fahren den
        Solver direkt) gilt true; die Rope überschreibt das Flag jeden Step. */
-    this._hostSettled = true;
+    this._hostSettled = true; this._hostTaut = false;
   }
 
   reset() { this.wraps.length = 0; this.length = 0; this.solved = false; this._lenOff = 0; this.lengthGeo = 0; }
@@ -1666,11 +1665,50 @@ class RopePathSolver {
          JEDEM Kontakt, weil jede lokale Sehne „gebraucht" meldet — sie löst
          sich nie von selbst.                                                 */
       const settled = !!this._hostSettled;
-      if (!settled || releasing) { this._deadEnd = 0; }
-      else if (this._rebuildCool > 0) this._rebuildCool--;
-      else if (this._residualBlocked()) {
-        this._deadEnd = (this._deadEnd || 0) + 1;
-        if (this._deadEnd >= Math.max(1, P.rebuildAfter || 2)) {
+      /* Dead-End-Erkennung: blockiert UND kein Release laufend UND kein Insert
+         mehr möglich UND die Kontakte BEWEGEN SICH NICHT MEHR. Das letzte
+         Kriterium trennt die echte Sackgasse (Kontakte stützen sich gegenseitig,
+         nichts gleitet) von einem transienten Eck-Clip: Beim Gleiten um eine
+         Kante läuft die Polylinie für wenige Ticks durch die Ecke, aber die
+         Kontakte wandern dabei sichtbar (Zentimeter pro Tick). Ohne das
+         Bewegungskriterium feuerte der Neuaufbau mitten im Gleiten und wischte
+         eine intakte Wicklung weg — gemessen als Snap im Straf-Szenario
+         (3 Rebuilds in Folge, Wraps kurzzeitig 0), also genau der Fehler,
+         den die Schranke verhindern soll.                                  */
+      const bk = this._residualBlockedAt();
+      const blockedNow = bk >= 0;
+      const pp = this._rbPrev || (this._rbPrev = []);
+      let move = 0;
+      if (blockedNow && pp.length === this.wraps.length)
+        for (let j = 0; j < this.wraps.length; j++) move = Math.max(move, vdist(pp[j], this.wraps[j].p));
+      pp.length = this.wraps.length;
+      for (let j = 0; j < this.wraps.length; j++) { if (!pp[j]) pp[j] = v3(); vcopy(pp[j], this.wraps[j].p); }
+      const inserted = this.stats.inserts !== (this._rbIns || 0);
+      this._rbIns = this.stats.inserts;
+      if (!settled || releasing || !blockedNow || this.wraps.length === 0) this._deadEnd = 0;
+      else if (!inserted && move < 0.02) this._deadEnd = (this._deadEnd || 0) + 1;
+      else this._deadEnd = 0;
+      /* Halte-Zustand statt Sackgasse: ist das blockierte Segment das hand-nahe
+         UND zieht das Seil (Budget kürzer als der Pfad dieser Wicklung) UND
+         ist die Route wirklich um die Box gewickelt, dann ist die Blockade
+         KEIN Solver-Müll, sondern die physikalisch korrekte Haltung eines zu
+         kurzen Seils in seiner Homotopie-Klasse: Die straffe Gerade schneidet
+         die Ecke, weil das Seil nicht aus seiner Wicklung heraus kann. Ein
+         Neuaufbau würde die Homotopie unter Last wechseln — genau der
+         unphysikalische Snap, den der Nutzer sieht („Seil erschafft sich neu
+         und wird sofort straff/kurz"). Gemessen im Straf-Szenario mit
+         abgerolltem Seil: 3 Rebuilds, Wraps kurzzeitig 0, Snap bei t=1,6 s.
+         Der Solver-Müll-Fall (Orbit-Akkumulation) hat sein blockiertes Segment
+         dagegen ZWISCHEN zwei Kontakten und bleibt reparierbar.            */
+      let holding = false;
+      if (bk === 0 && this.wraps.length > 0 && this._hostTaut) {
+        const w0 = this.wraps[0];
+        if (w0.edgeIdx >= 0 && Math.abs(this._pathWindingXZ(this.pts, w0.box)) > (P.wrapWindTol || 0.6))
+          holding = true;
+      }
+      if (this._rebuildCool > 0) this._rebuildCool--;
+      else if (this._deadEnd > 0 && !holding) {
+        if (this._deadEnd >= Math.max(2, P.rebuildAfter || 6)) {
           this._deadEnd = 0;
           const liveGeo = this.lengthGeo;
           this.wraps.length = 0;
@@ -1680,9 +1718,10 @@ class RopePathSolver {
           this._lenOff = (this._lenOff || 0) + gain;
           this.length = this.lengthGeo + this._lenOff;
           this.stats.rebuilds = (this.stats.rebuilds || 0) + 1;
+          pp.length = 0;
           if (this._residualBlocked()) this._rebuildCool = 30;
         }
-      } else this._deadEnd = 0;
+      }
 
       /* 5) Drift-Resync. Der Neuaufbau oben greift nur an blockierten Routen.
          Es gibt aber einen zweiten Defektzustand: eine Route, die KOLLISIONSFREI
@@ -1988,11 +2027,14 @@ class RopePathSolver {
   }
 
   /** Läuft die eigene Route durch Geometrie? (Sackgassen-Indikator) */
-  _residualBlocked() {
+  _residualBlocked() { return this._residualBlockedAt() >= 0; }
+
+  /** Index des ersten blockierten Segments, −1 wenn keines. */
+  _residualBlockedAt() {
     const pts = this.pts, bx = this.ptsBox;
     for (let k = 0; k < pts.length - 1; k++)
-      if (this._segBlocked(pts[k], pts[k + 1], bx[k], bx[k + 1]) !== null) return true;
-    return false;
+      if (this._segBlocked(pts[k], pts[k + 1], bx[k], bx[k + 1]) !== null) return k;
+    return -1;
   }
 
   _prevPt(i) { return (i === 0) ? this._A : this.wraps[i-1].p; }
@@ -2159,6 +2201,7 @@ class RopePathSolver {
             else {
               w._dead = true;
               this.stats.bogusDropped = (this.stats.bogusDropped || 0) + 1;
+              this.stats.releaseEvents = (this.stats.releaseEvents || 0) + 1;
               continue;
             }
           }
@@ -2184,7 +2227,7 @@ class RopePathSolver {
         if (w.release === 0 && w.edgeIdx >= 0 && w._atEnd)
           this._cornerSlide(i, prev, next, prevBox, nextBox, w);
 
-        if (w.release >= 1) { w._dead = true; continue; }
+        if (w.release >= 1) { w._dead = true; this.stats.releaseEvents = (this.stats.releaseEvents || 0) + 1; continue; }
       }
 
       /* Kontakt bleibt IMMER exakt auf seiner Kante — auch während des
@@ -2596,6 +2639,7 @@ class Rope {
     this.tensionLevel = 0; this.settleActive = false; this.pumpOffset = 0;
     this._settledOnce = true; this._settleTarget = 0; this._tidyT = 0; this._prevWraps = null;
     this._reqPrev = null; this._dropAccum = 0; this._handAccum = 0; this._tidyHandPrev = null;
+    this._prevRelEv = null; this._tidyReeled = 0;
   }
 
   /** Seil am Anker aktivieren (wird vom Haken aufgerufen). */
@@ -2616,6 +2660,7 @@ class Rope {
     this._settleT = 0;
     this._tidyT = 0; this._prevWraps = null;
     this._reqPrev = null; this._dropAccum = 0; this._handAccum = 0; this._tidyHandPrev = null;
+    this._prevRelEv = null; this._tidyReeled = 0;
     /* Kette: nahtlos übernehmen, wenn ihr fernes Ende schon am Haken sitzt
        (Übergang Flug → Verankern, gemessen am Ankerpunkt). Wird dagegen an
        einen anderen Punkt angehängt, neu als Gerade legen — die Enden der
@@ -2719,6 +2764,8 @@ class Rope {
        Mechanismen dürfen aber nur im stabilen Attached-Betrieb laufen (siehe
        `rebuildAfter`). Deshalb der Zustand hier als Flag mitgeben. */
     this.path._hostSettled = (this.phase === ROPE_PHASE.ATTACHED && !this.settleActive);
+    /* Zug-Zustand (Seil überdehnt): Homotopiewechsel wäre unphysikalisch. */
+    this.path._hostTaut = (this.overshoot || 0) > 0.05;
     this.required = this.path.solve(handPos, endPt, dt, null, endBox);
     this.stats.solves++;
 
@@ -2844,15 +2891,38 @@ class Rope {
     }
     this._reqPrev = this.required;
     if (this.attached && !this.settleActive) {
-      if ((this._prevWraps != null && wrapCount < this._prevWraps ||
-           (this._dropAccum || 0) > (this._handAccum || 0) + 0.5) && this.slack > 0.5) {
-        this._tidyT = 1.0; this._dropAccum = 0; this._handAccum = 0;
+      /* Nachroll-Fenster NUR bei echten Topologie-Ereignissen (Kontakt
+         gegangen: Release, Bogus-Drop, Resync, Rebuild). Die frühere zweite
+         Bedingung `dropAccum > handAccum + 0.5` fraß bewusst abgerolltes
+         Spiel: schon das GLEITEN eines Kontakts um eine Kante verkürzt
+         `required` ohne Handbewegung, und tidy wertete das als freigesetztes
+         Spiel und rollte das Mausrad-Seil des Spielers ein — gemessen im
+         Straf-Szenario: 16 m bezahltes Spiel wurden bis auf slack −7 m
+         eingerollt, obwohl nie ein Kontakt fiel. Das ist das gemeldete
+         „und dann verkürzt es sich auch noch direkt".                     */
+      const relEv = this.path.stats.releaseEvents || 0;
+      const relNew = this._prevRelEv == null ? false : relEv > this._prevRelEv;
+      this._prevRelEv = relEv;
+      if ((this._prevWraps != null && wrapCount < this._prevWraps || relNew) && this.slack > 0.5) {
+        this._tidyT = 1.0; this._tidyReeled = 0; this._handAccum = 0;
       }
       if (this._tidyT > 0) {
         this._tidyT -= dt;
+        /* NACHGEROLLT WIRD NUR DIE FREIGESETZTE MENGE, nicht das ganze Spiel.
+           `_dropAccum` summiert die Required-Abfälle seit dem letzten Anstieg
+           (also genau das, was die gefallenen Kontakte freigegeben haben,
+           inklusive Offset-Fade); davon abgezogen wird, was dieses Fenster
+           bereits gerollt hat. Früher zog das Fenster bis auf straff — und
+           fraß damit bewusst per Mausrad abgerolltes Seil in dem Moment, in
+           dem irgendein Kontakt fiel (gemessen: 25,8 m bezahltes Budget →
+           8,1 m in 0,9 s). Das ist das gemeldete „und dann verkürzt es sich
+           auch noch direkt".                                                */
+        const released = Math.max(0, (this._dropAccum || 0) - (this._tidyReeled || 0));
         const pull = Math.min(P.settleReelSpeed * dt,
+                              released,
                               Math.max(0, this.slack - P.tautMargin),
                               Math.max(0, this.budget - (this.required + P.tautMargin)));
+        this._tidyReeled = (this._tidyReeled || 0) + pull;
         this.budget -= pull;
         this.budgetEff = this.budget + (this.pumpOffset || 0);
         this.slack = this.budgetEff - this.required;
