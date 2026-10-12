@@ -184,9 +184,10 @@ sind *Kantenpunkte*, und `_cornerSlide` — der einzige Mechanismus für ein
 stetiges „um die Ecke rutschen" — ist doppelt verriegelt.
 (a) Sein Gate `_atEnd` verlangt den Kontaktpunkt innerhalb 5 cm vom
 Kanten**ende**; vertikale Kanten im Level sind im Median 5,00 m lang
-(max 42 m), daher trifft das auf nur 0,6 % der Kontakt-Schritte zu.
+(max 42 m, die Testsäule selbst 10,00 m), daher trifft das auf nur 0,6 %
+der Kontakt-Schritte zu.
 (b) `cornerSlideReach = 0,8 m`, die benachbarten vertikalen Kanten der
-2,6-m-Säule liegen aber 5,2 m auseinander — ein erreichter Aufruf kann die
+2,6-m-Säule liegen aber 2,60 m auseinander — ein erreichter Aufruf kann die
 Nachbarkante nicht erreichen. Umkreisen einer Säule ist ein azimuthaler
 Wechsel zwischen zwei *parallelen* Kanten; dafür gibt es keinen Mechanismus.
 Hinzu kommt, dass der dritte Zweig der Release-Kaskade

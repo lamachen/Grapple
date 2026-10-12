@@ -279,7 +279,7 @@ console.log(` _atEnd                 : ${aeSteps} von ${cSteps} Kontakt-Schritte
 
    Drei Zwischenstufen, jeweils isoliert gemessen:
      · nur _atEnd-Gate offen, _cornerSlide original: 0 Erfolge (cornerSlideReach
-       = 0,8 m gegen 5,2 m Kantenabstand), Zahlen bit-identisch zu HEAD,
+       = 0,8 m gegen 2,60 m Kantenabstand), Zahlen bit-identisch zu HEAD,
        179/179. Also wirkungslos, nicht schädlich.
      · Lookahead mit `wraps.push` + `_buildPts` + `wraps.pop` zur
        Koexistenzprüfung: 176/179. _buildPts schreibt this.pts/ptsBox neu und
