@@ -372,24 +372,10 @@ class Game {
     o[0] = eye[0] + right[0]*0.155 + fwd[0]*0.30 - up[0]*0.125;
     o[1] = eye[1] + right[1]*0.155 + fwd[1]*0.30 - up[1]*0.125;
     o[2] = eye[2] + right[2]*0.155 + fwd[2]*0.30 - up[2]*0.125;
-    /* Im ATTACHED-Zustand fest OHNE Neigen zum Anker: das frühere 0,16-m-
-       Mitneigen verschob den Austritt bei jeder Blick- oder Ankerbewegung
-       und addierte eine eigene Richtungsänderung direkt vor der Linse.
-       Design: Spider-Man — das Seil kommt aus der Hand und sonst nirgendwo-
-       her; zwischen Mündung und Anker entscheidet allein die Simulation.
-       Im FLUG dagegen ist die Mündung nur Render-Vorspann (der Ketten-Pin
-       liegt dort an der echten Hand am Körper, `handPin = this.hand`), und
-       das leichte Mitneigen zur Hakenspitze richtet dieses Verbindungsstück
-       zum Flugweg aus — ohne es knickt der Stub beim Abschuss nach unten
-       weg (Nutzer-Rückmeldung nach cecc34f).                               */
-    if (R.phase === 1) {
-      const tgt = R.farEndRef();
-      const d = vnormSafe(vsubNew(tgt, eye), fwd[0], fwd[1], fwd[2]);
-      o[0] += (d[0]-fwd[0])*0.16; o[1] += (d[1]-fwd[1])*0.16; o[2] += (d[2]-fwd[2])*0.16;
-      const ox = o[0]-eye[0], oy = o[1]-eye[1], oz = o[2]-eye[2];
-      const sc = 0.3617 / (Math.sqrt(ox*ox+oy*oy+oz*oz) || 1e-6);
-      o[0] = eye[0]+ox*sc; o[1] = eye[1]+oy*sc; o[2] = eye[2]+oz*sc;
-    }
+    /* Fest in der Kamera, in JEDER Phase, ohne Neigen zum Ziel: solange es
+       keinen IK-Arm gibt, ist jeder Ziel-bezogene Versatz des Austritts eine
+       zusätzliche Richtungsänderung direkt vor der Linse (Knick) und ein
+       Sonderweg pro Phase. Ein Punkt, eine Regel.                          */
     return o;
   }
 
@@ -438,7 +424,7 @@ class Game {
 
     // Aktionen
     if (firstStep) {
-      if (this.input.releasePressed) { R.detach(); H.retractNow(R); this.audio.retract(); }
+      if (this.input.releasePressed) { H.retractNow(R); this.audio.retract(); }
       if (this.input.firePressed) {
         if (R.phase !== 0) { R.detach(); H.state = 'idle'; }
         const eye = P.eyePoint(this._eye || (this._eye = v3()));
@@ -466,7 +452,10 @@ class Game {
     const hand = this.orbit ? P.handPoint(this._hand || (this._hand = v3()), R)
                             : this.ropeOriginPoint(this._hand || (this._hand = v3()), false);
     if (H.state !== 'idle') {
-      const ev = H.step(dt, R, R.phase === 1 ? P.chestPoint(this._chest || (this._chest = v3())) : hand);
+      /* Der Haken hängt am Seil, und das Seil kommt aus der Mündung — also
+         ist die Mündung in jeder Phase sein Bezugspunkt (Seilzug im Flug,
+         Pendelschranke und Einroll-Ende beim Rückholen).                   */
+      const ev = H.step(dt, R, hand);
       if (ev) this.onHookEvent(ev);
     }
 
@@ -474,7 +463,7 @@ class Game {
     const chest = P.chestPoint(this._chest || (this._chest = v3()));
     R.visualHand = hand;
     R.setPlayerCapsule(P.pos, P.p.radius, P.hh);
-    R.step(dt, chest, H.flying ? H.pos : null, P.vel);
+    R.step(dt, chest, (H.flying || H.state === 'retract') ? H.pos : null, P.vel);
 
     // 4) Spieler
     const pev = P.update(dt, this.input, R);
@@ -501,6 +490,9 @@ class Game {
       this.particles.burst(ev.p, ev.n, 8, { speed:3.0, color:[1.0,0.85,0.5,0.85], life:0.28, size:0.08 });
     } else if (ev.type === 'miss') {
       this.audio.retract();
+    } else if (ev.type === 'retracted') {
+      /* Haken ist in der Hand angekommen: jetzt erst wird das Seil gelöst. */
+      this.rope.detach();
     }
   }
   onPlayerEvent(ev) {
@@ -634,34 +626,15 @@ class Game {
     const R = this.rope;
     if (R.phase === 0) { this._ropeCount = 0; return; }
     const curve = R.buildRenderCurve(this._curve);
-    /* Voranstellung der sichtbaren Hand NUR wenn die Kurve nicht ohnehin dort
-       beginnt. Im ATTACHED-Zustand liegt der Ketten-Pin auf visualHand (Node 0
-       wird in _stepChain jeden Schritt dorthin gesetzt) — Hand und Mittelpunkt
-       voranzustellen erzeugte dann DREI identische Stützpunkte am Seilanfang:
-       Null-Segmente, undefinierte Bandgeometrie, sichtbar als Knick/Wulst
-       0,36 m vor dem Auge. Im FLUG dagegen pinnt die Kette an der echten Hand
-       am Körper (`handPin = this.hand`), die Mündung ist reiner Render-Start:
-       ohne Verbindungsstück würde das Seil unten an der Körper-Hand beginnen
-       und mit dem Schlaffseil sofort nach unten wegzucken (Nutzer-Rückmeldung
-       nach cecc34f). Deshalb: Distanz prüfen, 1–2 Stützpunkte nur bei echtem
-       Abstand, nie bei deckungsgleichen Punkten.                           */
+    /* Keine Voranstellung: die Kurve beginnt in jeder Phase exakt am
+       Ketten-Pin, und der Pin ist die Kamera-Mündung (siehe _stepChain).
+       Vorangestellte Punkte wären deckungsgleich mit dem Kurvenstart und
+       erzeugten Null-Segmente mit undefinierter Bandgeometrie — sichtbar
+       als Knick/Wulst direkt vor der Linse.                                 */
     const n = curve.count;
+    const total = n;
     const buf = this._ropeBuf;
-    const hand = R.visualHand || R.hand;
-    let pre = 0;
-    if (n > 0) {
-      const d0 = Math.hypot(hand[0]-curve.buf[0], hand[1]-curve.buf[1], hand[2]-curve.buf[2]);
-      if (d0 > 0.05) {
-        buf[0]=hand[0]; buf[1]=hand[1]; buf[2]=hand[2];
-        pre = 1;
-        if (d0 > 0.30) {
-          buf[3]=(hand[0]+curve.buf[0])*0.5; buf[4]=(hand[1]+curve.buf[1])*0.5; buf[5]=(hand[2]+curve.buf[2])*0.5;
-          pre = 2;
-        }
-      }
-    }
-    buf.set(curve.buf.subarray(0, n*3), pre*3);
-    const total = n + pre;
+    buf.set(curve.buf.subarray(0, n*3), 0);
     this._ropeCount = total;
 
     const cam = r.camPos;

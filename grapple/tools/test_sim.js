@@ -56,7 +56,7 @@ function step(sim, world, dt, input) {
   world.stepBodies(dt);
   if (sim.hook.state !== 'idle') sim.hook.step(dt, sim.rope, sim.player.pos);
   const chest = sim.player.chestPoint(E.v3());
-  sim.rope.step(dt, chest, sim.hook.flying ? sim.hook.pos : null, sim.player.vel);
+  sim.rope.step(dt, chest, (sim.hook.flying || sim.hook.state === 'retract') ? sim.hook.pos : null, sim.player.vel);
   sim.player.update(dt, input || INPUT_IDLE, sim.rope);
 }
 
@@ -1739,8 +1739,115 @@ console.log('\n═══ 14. Säulen-Orbit: kürzeste freie Route, kein Fallback
 
 /* ========================================================================== */
 console.log('\n══════════════════════ ERGEBNIS ══════════════════════');
+/* ========================================================================== */
+console.log('\n═══ 16. Rückholen: Seil bleibt verbunden, Haken folgt dem Pfad ═══');
+{
+  const DT = 1/60;
+  const step16 = (sim, input) => {
+    w16.stepBodies(DT);
+    if (sim.hook.state !== 'idle') sim.hook.step(DT, sim.rope, sim.player.pos);
+    const chest = sim.player.chestPoint(E.v3());
+    sim.rope.step(DT, chest, (sim.hook.flying || sim.hook.state === 'retract') ? sim.hook.pos : null, sim.player.vel);
+    sim.player.update(DT, input || INPUT_IDLE, sim.rope);
+  };
+  const w16 = mkWorld();
+  w16.addBox([-80,-2,-80],[80,0,80],{color:[1,1,1]});
+  w16.addBoxCS([0,1.25,0],[1.5,2.5,10],{color:[.55,.55,.55]}); // Wand, Oberkante y=2,5
+  w16.addBoxCS([6,3,0],[4,6,4],{color:[.4,.6,.4]});           // Block hinter der Wand
+  const s = mkSim(w16);
+  s.player.spawn([-6,1,0], 0);
+  for (let i=0;i<30;i++) step16(s);
+  /* Haken deterministisch hinter die Wand setzen (ballistischer Abschuss ist
+     nicht Gegenstand dieses Tests): Seil muss für diese Lage über die Wand-
+     oberkante gelegt werden, sowohl hin als auch zurück.                  */
+  s.hook.state = 'stuck';
+  E.vset(s.hook.pos, 3, 2.0, 0);
+  s.rope.attachAt([3,2.0,0],[0,1,0],null,null,12);
+  s.rope.settleActive = false; s.rope.phase = 3;
+  for (let i=0;i<30;i++) step16(s);   // Topologie etablieren
+  ok(s.rope.path.wraps.length >= 1, '16: Seil liegt über der Wandkante',
+     `${s.rope.path.wraps.length} Kontakte`);
+  s.hook.retractNow(s.rope);
+  let phase4 = false, connected = true, overWall = false, maxRise = 0, done = -1, prevD = 1e9;
+  for (let i=0;i<6*60;i++) {
+    const chest = s.player.chestPoint(E.v3());
+    const ev = s.hook.step(DT, s.rope, chest);
+    s.rope.step(DT, chest, (s.hook.flying || s.hook.state==='retract') ? s.hook.pos : null, s.player.vel);
+    s.player.update(DT, INPUT_IDLE, s.rope);
+    if (s.rope.phase === 4) phase4 = true;
+    if (s.rope.phase !== 4 && s.hook.state === 'retract') connected = false;
+    const hp = s.hook.pos;
+    if (Math.abs(hp[0]) < 1.2 && hp[1] > 2.2) overWall = true;   // Rückweg über die Kante
+    const d = E.vdist(hp, chest);
+    maxRise = Math.max(maxRise, d - prevD); prevD = d;
+    if (ev && ev.type === 'retracted') { done = i/60; s.rope.detach(); break; }
+  }
+  ok(phase4 && connected, '16a: Seil bleibt beim Rückholen verbunden (kein abgeschnittener Haken)',
+     `Phase-4-Fenster=${phase4}, durchgehend verbunden=${connected}`);
+  ok(overWall, '16b: Haken kommt über die Wandkante zurück (Pfad, nicht Luftlinie)',
+     overWall ? 'Kantenüberquerung gemessen' : 'keine Überquerung der Oberkante gesehen');
+  ok(maxRise < 0.35, '16c: Abstand zur Hand schrumpft monoton', `größter Anstieg ${maxRise.toFixed(2)} m/Schritt`);
+  ok(done >= 0 && s.rope.phase === 0 && s.hook.state === 'idle', '16d: vollständig in die Hand eingerollt',
+     done >= 0 ? `nach ${done.toFixed(2)} s, Phase ${s.rope.phase}` : 'nie angekommen');
+}
+
+console.log('\n═══ 17. Flug: Schlaffseil-Haufen bei Annäherung wird nachgerollt ═══');
+{
+  const DT = 1/60;
+  const w17 = mkWorld();
+  w17.addBox([-80,-2,-80],[80,0,80],{color:[1,1,1]});
+  const s = mkSim(w17);
+  s.player.spawn([0,1,0], 0);
+  for (let i=0;i<30;i++) {
+    w17.stepBodies(DT);
+    const chest = s.player.chestPoint(E.v3());
+    s.rope.step(DT, chest, s.hook.flying ? s.hook.pos : null, s.player.vel);
+    s.player.update(DT, INPUT_IDLE, s.rope);
+  }
+  /* Steilschuss: Der Haken wird oben langsam — genau dann würde ein auf ihn
+     zulaufender Spieler einen Schlaffseil-Haufen vor sich herschieben, wenn
+     der Flug-Nachroll fehlt (Nutzer-Rückmeldung: „irgendwas Komisches mit
+     der Seillänge, wenn man näher ran läuft").                              */
+  {
+    const hand = s.player.handPoint(E.v3(), null);
+    const target = [0.5, 22, 0.5];
+    const d = E.vsubNew(target, hand); E.vnorm(d, d);
+    s.player.pitch = Math.asin(Math.max(-1, Math.min(1, d[1])));
+    s.player.yaw = Math.atan2(-d[0], -d[2]);
+    E.qFromYawPitch(s.player.quat, s.player.yaw, s.player.pitch);
+    s.hook.fire(hand, E.qForward(E.v3(), s.player.quat), E.qUp(E.v3(), s.player.quat),
+                E.qRight(E.v3(), s.player.quat), s.player.vel, s.rope);
+  }
+  let flew = 0, slowSeen = false;
+  for (let i=0;i<240 && s.hook.flying;i++) {
+    w17.stepBodies(DT);
+    s.hook.step(DT, s.rope, s.player.pos);
+    const chest = s.player.chestPoint(E.v3());
+    s.rope.step(DT, chest, s.hook.flying ? s.hook.pos : null, s.player.vel);
+    s.player.update(DT, INPUT_IDLE, s.rope);
+    flew++;
+    if (E.vlen(s.hook.vel) < 5) slowSeen = true;
+  }
+  ok(flew > 60 && slowSeen, '17: Haken wurde im Flug langsam (Messfenster erreicht)',
+     `${flew} Flug-Schritte, langsamer Punkt gesehen=${slowSeen}`);
+  /* jetzt unter den Haken laufen und schauen, ob der Haufen weggerollt wird */
+  let slackEnd = 0;
+  for (let i=0;i<60;i++) {
+    E.vset(s.player.pos, 0, 1, 0);
+    w17.stepBodies(DT);
+    if (s.hook.state !== 'idle') s.hook.step(DT, s.rope, s.player.pos);
+    const chest = s.player.chestPoint(E.v3());
+    s.rope.step(DT, chest, (s.hook.flying || s.hook.state==='retract') ? s.hook.pos : null, s.player.vel);
+    s.player.update(DT, INPUT_IDLE, s.rope);
+    slackEnd = s.rope.slack;
+  }
+  ok(slackEnd < 3.0, '17: kein Schlaffseil-Haufen unter einem langsamen Haken',
+     `slack nach 1 s Nachlauf ${slackEnd.toFixed(2)} m`);
+}
+
 for (const [st, name, detail] of results) {
   console.log(` ${st==='PASS'?'✔':'✘'} ${name}${detail ? '   ·  ' + detail : ''}`);
 }
 console.log(`\n ${passed} bestanden, ${failed} fehlgeschlagen`);
 process.exit(failed ? 1 : 0);
+

@@ -327,13 +327,19 @@ console.log('· Spawn-Buttons: ' + document.getElementById('spots').children.len
   const firedOn = game.input.fireHeld === true && game.rope.phase !== 0;
   console.log((firedOn ? '✔' : '✘') + ` LMB drücken feuert und hält: fireHeld=${game.input.fireHeld}, Seil-Phase=${game.rope.phase}`);
   if (!firedOn) failed = true;
-  // Taste loslassen muss das Seil einholen
+  // Taste loslassen muss das Seil VERBUNDEN einholen (Kabelstaubsauger):
+  // erst Phase RETRACT, am Ende vollständig eingerollt (Phase 0, Haken idle).
   game.rope.attachAt([8,13,-42],[0,1,0],null,null,20); game.rope.settleActive=false; game.rope.phase=3;
   window.dispatch('mouseup', { button: 0 });
   game.frame(1/60); game.frame(1/60);
-  const retracted = game.input.fireHeld === false && game.rope.phase === 0;
-  console.log((retracted ? '✔' : '✘') + ` LMB loslassen holt das Seil ein (Phase=${game.rope.phase}, Haken=${game.hook.state})`);
-  if (!retracted) failed = true;
+  const retracting = game.input.fireHeld === false && game.rope.phase === 4 && game.hook.state === 'retract';
+  console.log((retracting ? '✔' : '✘') + ` LMB loslassen holt verbunden ein (Phase=${game.rope.phase}, Haken=${game.hook.state})`);
+  if (!retracting) failed = true;
+  let voll = 0;
+  for (let i = 0; i < 6*60 && game.rope.phase !== 0; i++) { game.frame(1/60); voll = i; }
+  const fully = game.rope.phase === 0 && game.hook.state === 'idle';
+  console.log((fully ? '✔' : '✘') + ` Seil wird vollständig eingeholt (Phase=${game.rope.phase}, Haken=${game.hook.state}, nach ${(voll/60).toFixed(1)} s)`);
+  if (!fully) failed = true;
   // Sprung darf NICHT lösen
   game.rope.attachAt([8,13,-42],[0,1,0],null,null,20); game.rope.settleActive=false; game.rope.phase=3;
   game.player.grounded = false; game.player.airTime = 1;
@@ -342,11 +348,14 @@ console.log('· Spawn-Buttons: ' + document.getElementById('spots').children.len
   const stillOn = game.rope.phase === 3;
   console.log((stillOn ? '✔' : '✘') + ` Sprung am Seil löst NICHT (Phase=${game.rope.phase}) — Schwingen mit Absprung möglich`);
   if (!stillOn) failed = true;
-  // R bleibt das bewusste Lösen
+  // R bleibt das bewusste Lösen — jetzt als verbundenes Einrollen, das
+  // zuverlässig bis zum Verschwinden des Seils durchläuft.
   window.dispatch('keydown', { code: 'KeyR' });
   game.frame(1/60);
-  console.log((game.rope.phase === 0 ? '✔' : '✘') + ' R löst das Seil bewusst');
-  if (game.rope.phase !== 0) failed = true;
+  const rStart = game.rope.phase === 4 || game.rope.phase === 0;
+  for (let i = 0; i < 6*60 && game.rope.phase !== 0; i++) game.frame(1/60);
+  console.log((rStart && game.rope.phase === 0 ? '✔' : '✘') + ` R löst das Seil bewusst (einrollen bis Phase=${game.rope.phase})`);
+  if (!(rStart && game.rope.phase === 0)) failed = true;
   // rechte Taste darf NICHT mehr lösen (sie ist Drag-Look)
   game.rope.attachAt([8,13,-42],[0,1,0],null,null,20); game.rope.settleActive=false; game.rope.phase=3;
   cv.dispatch('mousedown', { button: 2, clientX: 640, clientY: 360, target: cv });

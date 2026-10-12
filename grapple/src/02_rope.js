@@ -133,6 +133,16 @@ const ROPE_DEFAULTS = {
                            //        wird. Unterhalb davon gilt: Persistenz
                            //        geht vor (kein Flattern zwischen Topologien).
 
+  // --- Rückholen (Kabelstaubsauger-Prinzip) ---------------------------------
+  retractReelSpeed: 16,    // m/s — Rate, mit der die verfügbare Seillänge beim
+                           //        Rückholen eingerollt wird. Der Haken hängt
+                           //        am Seilende und wird vom Pfad geführt, auch
+                           //        über Kanten, über die das Seil liegt.
+  flightSag:        0.35,  // m — Schlaffseil, das im Flug höchstens stehen
+                           //        bleibt, nachdem der automatische Nachroll
+                           //        gearbeitet hat
+  flightReelSpeed:  18,    // m/s — Rate des automatischen Nachrollens im Flug
+
   // --- Topologische Freigabeschranke ---------------------------------------
   // Ein Seil, das um ein Objekt HERUM liegt (Umlaufwinkel in der Draufsicht
   // deutlich von null), ist topologisch gefangen: Es kann nur über eine Kante
@@ -1367,6 +1377,7 @@ class Rope {
     this.phase = ROPE_PHASE.IDLE;
     this.path.reset();
     this.budget = 0; this.budgetEff = 0; this.required = 0; this.slack = 0; this.tension = 0;
+    this.retractPos = null;
     this.tensionLevel = 0; this.settleActive = false; this.pumpOffset = 0;
     this._settledOnce = true; this._settleTarget = 0; this._tidyT = 0; this._prevWraps = null;
     this._reqPrev = null; this._dropAccum = 0; this._handAccum = 0; this._tidyHandPrev = null;
@@ -1374,6 +1385,62 @@ class Rope {
   }
 
   /** Seil am Anker aktivieren (wird vom Haken aufgerufen). */
+  /**
+   * Schrankt einen freien Haken (schlaffes Seil beim Rückholen) auf die
+   * ERREICHBARE Menge ein: nicht die Luftlinie zur Hand ist die Grenze,
+   * sondern die verfügbare Länge abzüglich des bereits um die Umlenkungen
+   * verlegten Seils. Ohne diese Pfad-Schranke pendelt der Haken beim
+   * Einrollen GERADLINIG durch die Wand zurück, statt über die Kante zu
+   * folgen (gemessen in test_sim.js 16b).
+   * Wird pos korrigiert, liefert die Funktion true.
+   */
+  constrainFreeEnd(pos, handPos) {
+    if (this.phase !== ROPE_PHASE.RETRACT) return false;
+    const wr = this.path.wraps;
+    let rem = this.budget;
+    let px = handPos[0], py = handPos[1], pz = handPos[2];
+    for (let i = 0; i < wr.length && rem > 0; i++) {
+      const q = wr[i].p;
+      rem -= Math.hypot(q[0]-px, q[1]-py, q[2]-pz);
+      px = q[0]; py = q[1]; pz = q[2];
+    }
+    const dx = pos[0]-px, dy = pos[1]-py, dz = pos[2]-pz;
+    const l = Math.hypot(dx, dy, dz);
+    let changed = false;
+    if (l > rem && l > 1e-6) {
+      const sc = Math.max(0, rem) / l;
+      pos[0] = px + dx*sc; pos[1] = py + dy*sc; pos[2] = pz + dz*sc;
+      changed = true;
+    }
+    /* Geometrie-Schranke für das letzte Stück: auch die Restlänge darf den
+       Haken nicht DURCH ein Objekt legen. Ohne diesen Clip rutschte der Haken
+       beim Einrollen geradlinig durch die Wand zurück, sobald die Umlenkung
+       kurz freigab (gemessen in test_sim.js 16b: keine Kantenüberquerung).
+       Mit Clip gleitet er an der Fläche hoch und über die Kante — der Weg,
+       den das Seil genommen hat.                                            */
+    const ex = pos[0]-px, ey = pos[1]-py, ez = pos[2]-pz;
+    const el = Math.hypot(ex, ey, ez);
+    if (el > 0.05) {
+      const hit = this.world.raycast([px, py, pz], [ex/el, ey/el, ez/el], el,
+                                     { minT: 1e-3, ropeOnly: true });
+      if (hit && hit.t < el - 1e-4) {
+        const t2 = Math.max(0.02, hit.t - 0.05);
+        pos[0] = px + ex/el*t2; pos[1] = py + ey/el*t2; pos[2] = pz + ez/el*t2;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /** Rückholen starten: Seil bleibt verbunden und rollt ein (kein detach). */
+  startRetract() {
+    if (this.phase === ROPE_PHASE.IDLE) return;
+    this.phase = ROPE_PHASE.RETRACT;
+    this.settleActive = false;
+    this._tidyT = 0;
+    this.retractPos = null;
+  }
+
   attachAt(point, normal, box, body, paidLength) {
     vcopy(this.anchor, point);
     vcopy(this.anchorNormal, normal);
@@ -1501,7 +1568,17 @@ class Rope {
     this.stats.solves++;
 
     /* ---- 2) Budget-Logik (Seil-Vorrat) -------------------------------- */
-    if (this.phase === ROPE_PHASE.FLIGHT) {
+    if (this.phase === ROPE_PHASE.RETRACT) {
+      /* Einrollen: das verfügbare Seil schrumpft mit fester Rate. Der Haken
+         wird anschließend auf den Bogenpunkt dieser Länge gesetzt (siehe
+         retractPos) — dadurch folgt er dem gelösten Pfad zurück, inklusive
+         über jede Kante, über die das Seil beim Abschuss gelegt wurde.    */
+      /* Untergrenze 0,3 m statt minBudget: das Seil muss bis in die Hand
+         einrollen können, sonst arretiert der Haken meterweit vor dem
+         Spieler (gemessen: Stillstand bei 2,0 m = minBudget).             */
+      this.budget = Math.max(0.3, this.budget - (P.retractReelSpeed || 16) * dt);
+      this.retractPos = null;
+    } else if (this.phase === ROPE_PHASE.FLIGHT) {
       /* Seilausgabe = BOGENLÄNGE der Hakenbahn, nicht die Luftlinie.
          Der Haken zieht das Seilende hinter sich her; weil seine Bahn eine
          Wurfparabel ist und das Seil außerdem durchhängt, ist die ausgegebene
@@ -1512,6 +1589,24 @@ class Rope {
       if (!this._prevHook) this._prevHook = vclone(hookPos);
       vcopy(this._prevHook, hookPos);
       this.budget = Math.min(P.capacity, Math.max(this.budget + (hs*P.feedGain + P.feedBias)*dt, d + 0.06));
+      /* Automatischer Nachroll im Flug: läuft der Spieler auf den Haken zu,
+         blieb das über die Hakenbahn bezahlte Seil früher vollständig stehen
+         und türmte sich als Schlaffseil (gemessen: mehrere Meter Haufen vor
+         dem Einhaken, danach harter Setz-Ruck). Wie beim Kabelstaubsauger
+         rollt der Überschuss über der Flughäng-Grenze jetzt mit fester Rate
+         nach — das hinter dem Haken herlaufende Seil (feedGain) bleibt
+         unberührt, solange es diese Grenze nicht unterschreitet.          */
+      /* Nachroll-NUR für den Haufen, nicht für die Fahne: hinter dem Haken
+         herlaufendes Seil ist gewollt (feedGain/feedBias) und wächst mit der
+         Hakengeschwindigkeit — die Erlaubnis skaliert deshalb mit hs. Erst
+         was darüber hinaus hängt (Spieler läuft auf den Haken zu, Haken
+         wird langsam), rollt mit fester Rate ein. Ohne den hs-Term würgte
+         der Nachroll die Fahne ab und das Seil zerrte mitten im Flug am
+         Haken (gemessen: Flug bricht nach 0,17 s ab, Haken fällt vor die
+         Wand statt dahinter).                                               */
+      const floor = d + 0.06 + (P.flightSag || 0.35) + 0.25 * hs;
+      if (this.budget > floor)
+        this.budget = Math.max(floor, this.budget - (P.flightReelSpeed || 18) * dt);
     } else if (this.settleActive) {
       /* Nach dem Verankern: Überschuss schnell EINZIEHEN, bis die Verbindung
          straff ist. Das ist das "Zusammenziehen" aus dem Zielbild.
@@ -1596,6 +1691,22 @@ class Rope {
     this.slack = this.budgetEff - this.required;
 
     this.overshoot = Math.max(0, -this.slack);
+
+    /* Bogenpunkt der verfügbaren Länge: ist der gelöste Pfad länger als das
+       Budget, liegt das Seilende (und damit der Haken) auf dem Pfad bei
+       genau budget Metern ab der Hand — straff, um alle Umlenkungen. Ist der
+       Pfad kürzer, bleibt retractPos null und der Haken pendelt schlaff am
+       Ende (Schwerkraft + Seilschranke in Hook.step).                      */
+    if (this.phase === ROPE_PHASE.RETRACT && this.required > this.budget + 1e-4) {
+      const cum = this.path.cum, pts = this.path.pts;
+      const want = this.budget;
+      let k = 1;
+      while (k < cum.length - 1 && cum[k] < want) k++;
+      const segL = Math.max(1e-6, cum[k] - cum[k - 1]);
+      const u = clamp((want - cum[k - 1]) / segL, 0, 1);
+      if (!this.retractPos) this.retractPos = v3();
+      vlerp(this.retractPos, pts[k - 1], pts[k], u);
+    }
 
     /* Nachroll-Fenster nach Topologie-Release (siehe Defekt #55): das Seil
        findet in dieser Zeit von selbst zurück auf straff, egal wie sich der
@@ -1816,9 +1927,20 @@ class Rope {
     const P = this.p, C = this.chain, path = this.path;
     if (!C.pos || C.pool < 8) C.allocate(P.chainMaxNodes || 96);
     const flying = (this.phase === ROPE_PHASE.FLIGHT);
-    const farPin = flying ? (hookPos || this.hookPos || this.anchor) : this.anchor;
-    const handPin = (!flying && this.visualHand) ? this.visualHand : this.hand;
-    const pathLen = flying ? Math.max(1e-4, vdist(this.hand, farPin))
+    const retract = (this.phase === ROPE_PHASE.RETRACT);
+    /* Beim Rückholen liegt die Kette wie im Attached-Zustand auf dem gelösten
+       Pfad (inkl. Umlenkungen), nur dass das ferne Ende der Haken ist: das
+       Seil wird sichtbar über die Kanten zurückgezogen.                    */
+    const farPin = (flying || retract) ? (hookPos || this.hookPos || this.anchor) : this.anchor;
+    /* EIN Austrittspunkt in allen Phasen: die Kamera-Mündung (visualHand).
+       Bis ein echter IK-Arm existiert, ist jede Körper-„Hand" eine statisch
+       nach unten hängende Hilfsposition, an der ein Seil weder sinnvoll
+       aussieht noch physikalisch Sinn ergibt (Nutzer-Entscheid 2026-10-13:
+       „Seil startet fix leicht rechts unten im Kamerabild"). Der Pfad-Solver
+       misst weiterhin ab Brustpunkt (stabile Constraint), der Offset zur
+       Mündung wird über pinCorr herausgerechnet.                            */
+    const handPin = this.visualHand ? this.visualHand : this.hand;
+    const pathLen = flying ? Math.max(1e-4, vdist(handPin, farPin))
                            : Math.max(1e-5, this.required);
 
     /* Pin-Polylinie: HAND → Wrap-Kontakte → fernes Ende. Der Pfad-Solver misst

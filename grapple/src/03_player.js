@@ -704,9 +704,20 @@ class Hook {
   }
 
   retractNow(rope) {
-    if (this.state === 'idle') return;
+    if (this.state === 'idle') {
+      /* Seil hängt ohne aktiven Haken (Randfall/Tests): nichts, was einrollen
+         könnte — sofort lösen. */
+      if (rope && rope.phase !== ROPE_PHASE.IDLE) rope.detach();
+      return;
+    }
     this.state = 'retract';
-    rope.detach();
+    this.t = 0;
+    /* Das Seil bleibt VERBUNDEN und rollt ein (Kabelstaubsauger): der Haken
+       hängt am Seilende und folgt dem gelösten Pfad zurück, auch über die
+       Kanten, über die das Seil beim Abschuss gelegt wurde. Ein sofortiges
+       detach ließ den Haken früher als getrenntes Projektil geradeaus zur
+       Hand fliegen, während das Seil verschwand — „als wäre es abgeschnitten". */
+    if (rope && rope.startRetract) rope.startRetract();
   }
 
   /* --------------------------------- Step -------------------------------- */
@@ -720,10 +731,38 @@ class Hook {
       const d = this._rt || (this._rt = v3());
       vsub(d, handPos, this.pos);
       const l = vlen(d);
-      if (l < 0.55 || this.t > 6) { this.state = 'idle'; return { type:'retracted' }; }
-      const s = P.retractSpeed * dt;
-      vscl(d, d, Math.min(1, s/l));
-      this.pos[0]+=d[0]; this.pos[1]+=d[1]; this.pos[2]+=d[2];
+      if (l < 0.55 || this.t > 8) { this.state = 'idle'; return { type:'retracted' }; }
+      const amSeil = rope && rope.phase === ROPE_PHASE.RETRACT;
+      if (amSeil && rope.retractPos) {
+        /* Straffes Seil: der Pfad ist die Autorität — der Haken sitzt auf dem
+           Bogenpunkt der verfügbaren Länge und rutscht damit über dieselben
+           Kanten zurück, über die das Seil hinausgelegt wurde.             */
+        const px = this.pos[0], py = this.pos[1], pz = this.pos[2];
+        vcopy(this.pos, rope.retractPos);
+        const il = 1/Math.max(1e-6, dt);
+        this.vel[0] = (this.pos[0]-px)*il; this.vel[1] = (this.pos[1]-py)*il; this.vel[2] = (this.pos[2]-pz)*il;
+      } else if (amSeil) {
+        /* Schlaffes Seil: der Haken pendelt als Körper am Ende — Gravitation,
+           Luftwiderstand, und die Seilschranke (Abstand zur Hand ≤ Budget). */
+        const px0 = this.pos[0], py0 = this.pos[1], pz0 = this.pos[2];
+        const g = W.gravity * P.gravityScale;
+        this.vel[1] += g * dt;
+        const sp = vlen(this.vel);
+        const dragF = P.drag * sp * 0.5;
+        this.vel[0] -= this.vel[0]*dragF*dt; this.vel[1] -= this.vel[1]*dragF*dt; this.vel[2] -= this.vel[2]*dragF*dt;
+        this.pos[0] += this.vel[0]*dt; this.pos[1] += this.vel[1]*dt; this.pos[2] += this.vel[2]*dt;
+        /* Pfad-Schranke (nicht Luftlinie!): der Haken bleibt auf der Seite
+           der Umlenkungen und folgt beim Einrollen über dieselben Kanten. */
+        if (rope.constrainFreeEnd(this.pos, handPos)) {
+          const il2 = 1/Math.max(1e-6, dt);
+          this.vel[0] = (this.pos[0]-px0)*il2; this.vel[1] = (this.pos[1]-py0)*il2; this.vel[2] = (this.pos[2]-pz0)*il2;
+        }
+      } else {
+        /* Ohne Seil (Fallback): gerade zur Hand, wie früher. */
+        const s = P.retractSpeed * dt;
+        vscl(d, d, Math.min(1, s/l));
+        this.pos[0]+=d[0]; this.pos[1]+=d[1]; this.pos[2]+=d[2];
+      }
       return null;
     }
     if (this.state === 'stuck') return null;
@@ -790,7 +829,7 @@ class Hook {
     // Timeout / Reichweite
     const dist = vdist(handPos, this.pos);
     if (this.t > P.maxFlightTime || dist > P.maxRange*1.25 || this.pos[1] < -30) {
-      this.state = 'retract'; this.t = 0; rope.detach();
+      this.state = 'retract'; this.t = 0; if (rope && rope.startRetract) rope.startRetract();
       return { type:'miss', p: vclone(this.pos) };
     }
     return null;
@@ -805,7 +844,7 @@ class Hook {
     // Zu streifender Auftreffwinkel oder nicht verankerbar → Abprallen
     if (!hookable || facing < P.stickFacing || impactSpeed < P.minStickSpeed || this.bounces >= P.maxBounces) {
       if (this.bounces >= P.maxBounces || impactSpeed < 3) {
-        this.state = 'retract'; this.t = 0; rope.detach();
+        this.state = 'retract'; this.t = 0; if (rope && rope.startRetract) rope.startRetract();
         return { type:'miss', p: vclone(this.pos), n: vclone(n) };
       }
       this.bounces++;
