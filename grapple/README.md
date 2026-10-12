@@ -152,10 +152,47 @@ Alles headless, ohne Browser und ohne GPU:
 ```bash
 node tools/test_sim.js       # 179 physikalische Assertions
 node tools/test_browser.js   # Renderer/Loop/HUD gegen DOM- + WebGL2-Stub
+node tools/test_wrap.js      # Wickeln um Objekte: 4 Invarianten + 4 XFAIL
 node tools/check_panel.js    # zeigt/erreicht jeder der 29 Regler seinen echten Wert?
 node tools/bench.js          # Micro-Benchmarks
 python3 tools/build.py       # src/*.js → index.html
 ```
+
+### Bekannter Defekt: Wickeln um Objekte (`tools/test_wrap.js`)
+
+Ein um ein Objekt gewickeltes Seil kann sich bei seitlicher Bewegung von den
+Kanten lösen, auf die andere Seite wechseln und sich als direkte Linie
+Anker→Spieler neu bilden. `test_wrap.js` fährt die Säule des Levels in vier
+Orbits ab und arretiert den Befund als **XFAIL** — der Test ist grün, weil der
+Defekt dokumentiert ist, nicht weil er behoben wäre. Gemessen:
+
+| Größe | Ist | Ziel |
+|---|---|---|
+| Solver-Polylinie durch Geometrie | 602 von 4466 gültigen Schritten (13,5 %) | 0 |
+| größter Längensprung pro Schritt (8,3 ms) | 8,52 m | < 0,35 m |
+| Freisetzungen mit Längensprung > 0,5 m | 48 von 69 | 0 |
+| `_cornerSlide`-Erfolge | 0 bei 18 Aufrufen | > 0 |
+
+Die sichtbare Kurve läuft dabei **nicht** durch Geometrie — die beiden
+Garantien aus `02_rope.js` (Ketten-Nodes kollidieren, Render-Stützpunkte werden
+herausgeschoben) halten, gemessen 0 von 1500 Frames mit >5 mm Eindringung.
+Sichtbar ist der **Ruck**: `required` springt um bis zu 1,16 m in einem Frame
+und das Seil bildet sich schlagartig um.
+
+Ursache ist nicht eine einzelne Bedingung, sondern das Kontaktmodell: Kontakte
+sind *Kantenpunkte*, und `_cornerSlide` — der einzige Mechanismus für ein
+stetiges „um die Ecke rutschen" — ist doppelt verriegelt.
+(a) Sein Gate `_atEnd` verlangt den Kontaktpunkt innerhalb 5 cm vom
+Kanten**ende**; vertikale Kanten im Level sind im Median 5,00 m lang
+(max 42 m), daher trifft das auf nur 0,6 % der Kontakt-Schritte zu.
+(b) `cornerSlideReach = 0,8 m`, die benachbarten vertikalen Kanten der
+2,6-m-Säule liegen aber 5,2 m auseinander — ein erreichter Aufruf kann die
+Nachbarkante nicht erreichen. Umkreisen einer Säule ist ein azimuthaler
+Wechsel zwischen zwei *parallelen* Kanten; dafür gibt es keinen Mechanismus.
+Hinzu kommt, dass der dritte Zweig der Release-Kaskade
+(`02_rope.js`, `else { w.release = Math.max(0, w.release - 2*dt/rel); }`)
+logisch unerreichbar ist, weil `unnecessary === !directBlocked` — die dort
+kommentierte Hysterese existiert nicht, Release ist binär.
 
 `test_sim.js` prüft keine „läuft ohne Fehler"-Aussagen, sondern die physikalischen
 Behauptungen direkt, z. B.:
@@ -197,7 +234,7 @@ src/04_render.js      WebGL2-Renderer (instanziiert, Ribbon, Partikel)
 src/05_fx.js          Partikel + last-gesteuerter WebAudio-Synth
 src/06_level.js       Referenz-Level (jede Zone = eine Seil-Eigenschaft)
 src/07_game.js        Loop, Input, Viewmodel, HUD, Tuning-Panel
-tools/                Build, Physik-Tests, Browser-Smoke-Test, Panel-Check, Benchmarks
+tools/                Build, Physik-Tests, Browser-Smoke-Test, Wickel-Test, Panel-Check, Benchmarks
 ```
 
 `src/02_rope.js` ist der Teil, der die Aufgabe löst. Der Rest ist ein möglichst kleiner,
