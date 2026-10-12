@@ -391,7 +391,7 @@ class Game {
     /* `this._hand` statt `R.visualHand`: visualHand wechselt seine Identität
        zwischen Physik (=_hand) und Render (=_ropeOrigin). Je nach Substep-Zahl
        wäre sonst der Snapshot-Slot ein ANDERES Objekt als der Apply-Slot. */
-    add(P.pos); add(R.hand); add(this._hand); add(H.pos);
+    add(P.pos); add(R.hand); add(this._hand); add(H.pos); add(R.anchor);   // Anker fährt mit bewegten Körpern
     if (C && C.pos) for (let i = 0; i < C.n; i++) add(C.pos[i]);
     for (const b of this.world.bodies) add(b.pos);
     return t;

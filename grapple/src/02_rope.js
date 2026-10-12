@@ -1371,13 +1371,32 @@ class Rope {
     this._settledOnce = true; this._settleTarget = 0; this._tidyT = 0; this._prevWraps = null;
     this._reqPrev = null; this._dropAccum = 0; this._handAccum = 0; this._tidyHandPrev = null;
     this._prevRelEv = null; this._tidyReeled = 0;
+    this.anchorBody = null;
+  }
+
+  /** Anker an den Körper binden, auf dem er sitzt (idempotent, billig). */
+  syncAnchor() {
+    const b = this.anchorBody;
+    if (b && this.anchorLocal) vadd(this.anchor, b.pos, this.anchorLocal);
+    return this.anchor;
   }
 
   /** Seil am Anker aktivieren (wird vom Haken aufgerufen). */
   attachAt(point, normal, box, body, paidLength) {
     vcopy(this.anchor, point);
     vcopy(this.anchorNormal, normal);
-    this.anchorBox = box; this.anchorBody = body || null;
+    this.anchorBox = box;
+    /* Sitzt der Anker auf einem bewegten Körper (Kiste, Hebebühne, Pendel-
+       Block), wird er KÖRPER-LOKAL gespeichert und pro Schritt aus der
+       Körperposition abgeleitet (`syncAnchor`). Vorher blieb er im Weltraum
+       stehen, während der Körper wegfuhr: das Seilende hing in der Luft.
+       `body` ist nur bei Treffern auf dynamische Körper gesetzt; Tests und
+       Aufrufer, die nur `box` übergeben, werden über `box.dynamic` erkannt. */
+    this.anchorBody = body || ((box && box.dynamic) ? box : null);
+    if (this.anchorBody) {
+      if (!this.anchorLocal) this.anchorLocal = v3();
+      vsub(this.anchorLocal, point, this.anchorBody.pos);
+    }
     this.budget = clamp(paidLength, this.p.minBudget, this.p.capacity);
     this.path.reset();
     this.phase = ROPE_PHASE.SETTLING;
@@ -1480,6 +1499,9 @@ class Rope {
     vcopy(this.hand, handPos);
 
     if (this.phase === ROPE_PHASE.IDLE) { this.tensionLevel = 0; this.tension = 0; return; }
+
+    // Anker folgt seinem Körper (vor dem Pfad-Solve, der ihn als Endpunkt nutzt)
+    if (this.phase !== ROPE_PHASE.FLIGHT) this.syncAnchor();
 
     /* ---- 1) Pfad-Topologie -------------------------------------------- */
     if (hookPos) { if (!this.hookPos) this.hookPos = v3(); vcopy(this.hookPos, hookPos); }

@@ -535,6 +535,64 @@ console.log('\n═══ 9. Rückwirkung: Seil zieht dynamische Kiste ═══'
 }
 
 /* ========================================================================== */
+console.log('\n═══ 9b. Anker folgt dem bewegten Körper (Regression) ═══');
+{
+  // Der Anker sitzt auf einer gezogenen Kiste: er MUSS mit ihr wandern.
+  // Vorher blieb er im Weltraum stehen (Kiste 2.1 m weiter, Anker bei x = 0).
+  const w = mkWorld();
+  w.addBox([-40,-2,-40],[40,0,40],{color:[1,1,1]});
+  const crate = w.addBody({ pos:[0,1.0,0], half:[0.8,0.8,0.8], mass:120, friction:0.02 });
+  const s = mkSim(w, { tautMargin:0.0 });
+  E.vset(s.player.pos, 8, 1.0, 0); E.vset(s.player.vel, 0,0,0);
+  s.rope.attachAt(crate.pos, [1,0,0], crate, crate, 6.0);
+  const off0 = E.vsubNew(s.rope.anchor, crate.pos);
+  let maxDev = 0, moved = 0;
+  const x0 = crate.pos[0];
+  for (let i=0;i<900;i++){
+    s.player.vel[0] += 12*(1/120);
+    step(s,w,1/120);
+    moved = crate.pos[0] - x0;
+    maxDev = Math.max(maxDev, E.vdist(E.vaddNew(crate.pos, off0), s.rope.anchor));
+  }
+  ok(moved > 0.4, '9b: Kiste wird gezogen (Voraussetzung)', `Kiste wandert ${moved.toFixed(2)} m`);
+  ok(maxDev < 0.02, '9b: Anker bleibt am Körper (Offset konstant)', `max. Abweichung ${maxDev.toFixed(4)} m`);
+
+  // Kinematische Plattform: Anker fährt mit, auch bei reinem Anhängen über `box`.
+  const w2 = mkWorld();
+  w2.addBox([-40,-2,-40],[40,0,40],{color:[1,1,1]});
+  const plat = w2.addBody({ pos:[0,5,0], half:[1.5,0.3,1.5], kinematic:true,
+                            path:[[0,5,0],[0,5,10]], pathSpeed:4 });
+  const s2 = mkSim(w2, {});
+  E.vset(s2.player.pos, 0, 1.0, -6);
+  s2.rope.attachAt([0,5.3,0],[0,1,0], plat, null, 12.0);   // nur box, kein body
+  const offP = E.vsubNew(s2.rope.anchor, plat.pos);
+  let devP = 0;
+  for (let i=0;i<240;i++){ step(s2,w2,1/120); devP = Math.max(devP, E.vdist(E.vaddNew(plat.pos, offP), s2.rope.anchor)); }
+  ok(plat.pos[2] > 2, '9b: Plattform hat sich bewegt (Voraussetzung)', `z=${plat.pos[2].toFixed(2)}`);
+  ok(devP < 0.02, '9b: Anker fährt mit der kinematischen Plattform', `max. Abweichung ${devP.toFixed(4)} m`);
+  // Lösen → Bindung weg (kein Nachlaufen am nächsten Anker)
+  s2.rope.detach();
+  ok(s2.rope.anchorBody === null, '9b: detach löst die Körperbindung');
+}
+
+/* ========================================================================== */
+console.log('\n═══ 9c. raycast: dynamischer Körper VOR einer statischen Wand (Regression) ═══');
+{
+  const w = mkWorld();
+  w.addBox([20,-2,-20],[22,10,20],{tag:'wall'});
+  const crate = w.addBody({ pos:[0,1,0], half:[0.8,0.8,0.8], mass:120 });
+  const hit = w.raycast([-10,1,0],[1,0,0],60,{});
+  ok(hit && hit.body === crate && Math.abs(hit.t - 9.2) < 0.01,
+     '9c: Kiste vor der Wand wird gefunden (nächster Treffer gewinnt)',
+     hit ? `t=${hit.t.toFixed(2)} ${hit.body ? 'Kiste' : 'Wand'}` : 'kein Treffer');
+  const hitW = w.raycast([10,1,0],[1,0,0],60,{});
+  ok(hitW && !hitW.body && Math.abs(hitW.t - 10) < 0.01,
+     '9c: liegt die Wand näher als die Kiste, gewinnt die Wand', hitW ? `t=${hitW.t.toFixed(2)}` : 'kein Treffer');
+  const hitB = w.raycast([-10,1,0],[1,0,0],60,{ skip: crate });
+  ok(hitB && !hitB.body, '9c: skip überspringt die Kiste weiterhin', hitB ? `t=${hitB.t.toFixed(2)}` : 'kein Treffer');
+}
+
+/* ========================================================================== */
 console.log('\n═══ 10. Reel-Pumping: Amplitude wächst über Winkelimpuls ═══');
 {
   function swingTest(pumpReel, pumpTorque, seconds = 16) {

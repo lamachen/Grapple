@@ -138,30 +138,27 @@ class World {
       const t = rayAABB(o, d, F[i*6], F[i*6+1], F[i*6+2], F[i*6+3], F[i*6+4], F[i*6+5], bestT);
       if (t >= minT && t < bestT) { bestT = t; best = box; }
     }
-    if (best) {
-      const h = this._hit;
-      h.t = bestT; h.box = best; h.body = null;
-      h.p[0]=o[0]+d[0]*bestT; h.p[1]=o[1]+d[1]*bestT; h.p[2]=o[2]+d[2]*bestT;
-      aabbNormalAt(o, d, bestT, best, h.n);
-      return h;
-    }
-    // dynamische Körper (wenige → direkter Loop)
+    /* Dynamische Körper (wenige → direkter Loop) MÜSSEN auch dann getestet
+       werden, wenn schon ein statischer Treffer vorliegt: `bestT` ist dann die
+       Schranke, und nur ein NÄHERER Körper gewinnt. Früher kehrte die Methode
+       nach dem statischen Treffer sofort zurück — eine Kiste vor einer Wand
+       (oder vor dem Boden) wurde dadurch nie gefunden, und der Pfad-Solver
+       bekam in `_segBlocked` die dahinterliegende Wand als Blocker. */
+    let bestIsBody = false;
     for (let i = 0; i < this.bodies.length; i++) {
       const b = this.bodies[i];
       if (b === skip || b === skip2) continue;
       if (hookOnly && !b.hookable) continue;
       if (ropeOnly && !b.ropeSolid) continue;
       const t = rayAABB(o, d, b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2], bestT);
-      if (t >= minT && t < bestT) { bestT = t; best = b; }
+      if (t >= minT && t < bestT) { bestT = t; best = b; bestIsBody = true; }
     }
-    if (best && best.dynamic) {
-      const h = this._hit;
-      h.t = bestT; h.box = best; h.body = best;
-      h.p[0]=o[0]+d[0]*bestT; h.p[1]=o[1]+d[1]*bestT; h.p[2]=o[2]+d[2]*bestT;
-      aabbNormalAt(o, d, bestT, best, h.n);
-      return h;
-    }
-    return null;
+    if (!best) return null;
+    const h = this._hit;
+    h.t = bestT; h.box = best; h.body = bestIsBody ? best : null;
+    h.p[0]=o[0]+d[0]*bestT; h.p[1]=o[1]+d[1]*bestT; h.p[2]=o[2]+d[2]*bestT;
+    aabbNormalAt(o, d, bestT, best, h.n);
+    return h;
   }
 
   /**
