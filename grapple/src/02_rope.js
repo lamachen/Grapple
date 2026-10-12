@@ -134,6 +134,32 @@ const ROPE_DEFAULTS = {
                            //        wird. Unterhalb davon gilt: Persistenz
                            //        geht vor (kein Flattern zwischen Topologien).
 
+  // --- Topologische Freigabeschranke ---------------------------------------
+  // Ein Seil, das um ein Objekt HERUM liegt (Umlaufwinkel in der Draufsicht
+  // deutlich von null), ist topologisch gefangen: Es kann nur über eine Kante
+  // ausgleiten, nie durch bloße Sichtfreiheit verschwinden. Die lokale
+  // Release-Regel (`unnecessary = !directBlocked`) ignoriert das — sie gibt
+  // einen Kontakt frei, sobald die Sehne zum Nachbarkontakt frei ist, und bei
+  // einem gefangenen Seil wird diese Sehne irgendwann frei (Sicht auf den
+  // Anker), während das Seil physikalisch noch um die Objektseite liegt.
+  // Folge: alle Umlenkpunkte lösen sich binnen weniger Ticks und das Seil
+  // steht als direkte Linie neu da — exakt der gemeldete Fehler (Skizze
+  // uploads/image.png: zwei Umlenkungen an einer dünnen Säule, Spieler
+  // wechselt die Seite, Seil „ignoriert" das Objekt).
+  // Deshalb: solange der Umlaufwinkel der Route um die Box eines Kontakts
+  // über dieser Toleranz liegt, darf dieser Kontakt nicht freigegeben werden
+  // (Ausnahme: er steht am KantenENDE, kann also real ausgleiten).
+  wrapWindTol:      0.6,   // rad — ≈ 34°; darunter gilt die Route als
+                           //        nicht gewickelt (Draping, Geradeaus)
+  wrapWindMax:      7.5,   // rad — ≈ 430°: ab hier gilt das Seil als
+                           //        DURCHGERUTSCHT. Ein echtes Seil spiralt
+                           //        nicht beliebig um einen Mast, es rutscht
+                           //        unter Last durch. Ohne diese Obergrenze
+                           //        konserviert die Schranke im Dauer-Orbit
+                           //        eine Spirale, die das Kantenpunkt-Modell
+                           //        gar nicht darstellen kann (gemessen: 59,9 m
+                           //        Pfad mit 2 Kontakten nach 8 Runden).
+
   // --- A/B-Schalter gegen naive Referenz-Ansätze (siehe ARCHITEKTUR.md) ---
   wrapPhysics:      true,   // false  = "Luftlinie bleibt Seillänge" (naiv)
   rigidRod:         false,  // true   = zweiseitige Stange statt einseitigem Seil
@@ -430,6 +456,23 @@ class RopePathSolver {
             for (const w of this.wraps) if (w.box === f.box && w.edgeIdx === f.edgeIdx) { found = true; break; }
             if (!found) { subset = false; break; }
           }
+          /* Kontakte an Boxen, um die die Route gewickelt ist, dürfen auch
+             beim Resync nicht verschwinden — sonst würde der Resync genau den
+             Seitenwechsel-Teleport ausführen, den `_releaseTopoOK` der
+             Release-Regel verbietet (Skizzen-Fall). Die Referenz muss diese
+             Kontakte also identisch enthalten; aufräumen darf sie nur dort,
+             wo die Route nicht gewickelt ist.                               */
+          if (subset) {
+            for (let j = 0; j < this.wraps.length; j++) {
+              const w = this.wraps[j];
+              const pv = this._prevPt(j), nx = this._nextPt(j);
+              const det = vdist(pv, w.p) + vdist(w.p, nx) - vdist(pv, nx);
+              if (this._releaseTopoOK(w, det, j)) continue;
+              let kept = false;
+              for (const f of fr) if (f.box === w.box && f.edgeIdx === w.edgeIdx) { kept = true; break; }
+              if (!kept) { subset = false; this.stats.resyncWindHeld = (this.stats.resyncWindHeld || 0) + 1; break; }
+            }
+          }
           if (subset) {
             const gain = Math.max(0, liveLen - fr.len);
             this.wraps.length = 0;
@@ -444,7 +487,39 @@ class RopePathSolver {
             this.length = this.lengthGeo + this._lenOff;
             this.stats.resyncs = (this.stats.resyncs || 0) + 1;
             this.stats.resyncGain = (this.stats.resyncGain || 0) + gain;
-          } else this.stats.resyncSide = (this.stats.resyncSide || 0) + 1;
+          } else {
+            /* Schrittweise Müll-Entfernung. Schlägt die Teilmenge-Regel zu
+               (die frische Route setzt andere Kanten als die Live-Route),
+               liegt meist Solver-Müll vor: Kontakte, deren lokaler Umweg ein
+               Vielfaches des Objektumfangs beträgt und die keine echte
+               Umlenkung markieren. Ein KOMPLETTTAUSCH teleportiert alle
+               Ketten-Pins zugleich und schneidet dabei die Render-Kurve durch
+               Geometrie (gemessen: 0,80 m Eindringtiefe in test_sim.js 10f).
+               Deshalb pro Resync-Tick genau EINEN solchen Kontakt entfernen:
+               die verbleibenden Pins bleiben liegen und die Kette richtet
+               sich dazwischen stetig aus; der Längensprung geht in den
+               Offset-Fade. Zwei Kontakte Müll sind damit in ~166 ms weg.   */
+            let bj = -1, bDet = 0;
+            for (let j2 = 0; j2 < this.wraps.length; j2++) {
+              const w = this.wraps[j2];
+              if (w.edgeIdx < 0) continue;
+              const pv = this._prevPt(j2), nx = this._nextPt(j2);
+              const det = vdist(pv, w.p) + vdist(w.p, nx) - vdist(pv, nx);
+              const mn = w.box.min, mx = w.box.max;
+              const per = 2 * ((mx[0] - mn[0]) + (mx[2] - mn[2]));
+              if (det > per && det > bDet) { bDet = det; bj = j2; }
+            }
+            if (bj >= 0) {
+              const liveGeo = this.lengthGeo;
+              this.wraps.splice(bj, 1);
+              this._buildPts(A, B);
+              this._measure();
+              const gain = Math.max(0, liveGeo - this.lengthGeo);
+              this._lenOff = (this._lenOff || 0) + gain;
+              this.length = this.lengthGeo + this._lenOff;
+              this.stats.resyncGarbage = (this.stats.resyncGarbage || 0) + 1;
+            } else this.stats.resyncSide = (this.stats.resyncSide || 0) + 1;
+          }
         }
       }
     }
@@ -539,6 +614,108 @@ class RopePathSolver {
     this._buildPts(this._A, this._B);
     this._measure();
     return out;
+  }
+
+  /**
+   * Vorzeichenbehafteter Gesamtwinkel (Bogenmaß), den die Polyline `pts` um
+   * den Box-Mittelpunkt in der XZ-Ebene (Draufsicht) überstreicht.
+   *
+   * Billige Homotopie-Invariante: Zwei Routen, die sich ohne Schnitt mit der
+   * Box ineinander überführen lassen, haben denselben Umlaufwinkel. Ein Seil,
+   * das links um eine Säule liegt, und eine gerade Linie zum Anker
+   * unterscheiden sich um etwa π bis 2π — die Sehne dazwischen müsste durch
+   * die Säule. Ein Seil, das nur über eine Kante DRAPIERT ist (Wand, Würfel-
+   * oberkante, Schiene), hat dagegen Umlaufwinkel nahe null und darf über die
+   * lokale Release-Regel weich loslassen.
+   *
+   * Dicht genug abgetastet (0,4 m), damit auch ein weiter Bogen um die Box
+   * gezählt wird und nicht als gerader Sprung durch sie hindurch durchgeht.
+   */
+  _pathWindingXZ(pts, box) {
+    const cx = (box.min[0] + box.max[0]) * 0.5, cz = (box.min[2] + box.max[2]) * 0.5;
+    let sum = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const L = Math.hypot(b[0] - a[0], b[2] - a[2]);
+      const n = Math.max(1, Math.min(16, Math.ceil(L / 0.4)));
+      let px = a[0] - cx, pz = a[2] - cz;
+      for (let k = 1; k <= n; k++) {
+        const u = k / n;
+        const qx = a[0] + (b[0] - a[0]) * u - cx, qz = a[2] + (b[2] - a[2]) * u - cz;
+        const cross = px * qz - pz * qx, dot = px * qx + pz * qz;
+        if (Math.abs(cross) > 1e-12 || dot > 0) sum += Math.atan2(cross, dot);
+        px = qx; pz = qz;
+      }
+    }
+    return sum;
+  }
+
+  /** Schneidet die eigene Route durch den Grundriss der Box? (Defektzustand) */
+  _footprintCrossed(box) {
+    const mnx = box.min[0] + 0.1, mxx = box.max[0] - 0.1;
+    const mnz = box.min[2] + 0.1, mxz = box.max[2] - 0.1;
+    const pts = this.pts;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const L = Math.hypot(b[0] - a[0], b[2] - a[2]);
+      const n = Math.max(1, Math.min(12, Math.ceil(L / 0.3)));
+      for (let k = 1; k < n; k++) {
+        const u = k / n;
+        const px = a[0] + (b[0] - a[0]) * u, pz = a[2] + (b[2] - a[2]) * u;
+        if (px > mnx && px < mxx && pz > mnz && pz < mxz) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Darf dieser Kontakt überhaupt freigegeben werden?
+   *
+   * Ja, wenn die Route um seine Box nicht gewickelt ist (Draping, Geradeaus,
+   * Umlenkung an einer Kante ohne Umschlingung) — dann ist die lokale
+   * Sehnen-Regel physikalisch sinnvoll. Nein, wenn die Route um die Box
+   * gewickelt ist: Das Seil liegt an einer Objektseite und kann nur über
+   * Kanten ausgleiten; dass die Sichtlinie zum Anker frei wird, ändert daran
+   * nichts (genau das war der gemeldete Fehler).
+   *
+   * Zwei Ausnahmen:
+   *   · Der Kontakt steht am Ende seiner Kante (`_atEnd`): dort kann das Seil
+   *     real über den Eckpunkt ausgleiten — Freigabe ist stetig.
+   *   · Die Route schneidet bereits durch den Grundriss der Box: dann liegt
+   *     der Defektzustand vor, für den der Sackgassen-Neuaufbau zuständig ist
+   *     (`rebuildAfter`); die Release-Regel darf ihn nicht zusätzlich
+   *     verschlimmern, aber auch nicht blockieren, was der Neuaufbau braucht.
+   */
+  _releaseTopoOK(w, detour, idx) {
+    if (w.edgeIdx < 0) return true;
+    if (w._atEnd) return true;
+    /* Entscheidend ist nicht der absolute Umlaufwinkel, sondern seine
+       ÄNDERUNG durch das Entfernen dieses einen Kontakts: bleibt die Route
+       topologisch dieselbe (Seil bleibt auf derselben Objektseite), ist das
+       Entfernen ein stetiges Aufräumen. Dreht sich die Seite, wäre es der
+       Teleport durchs Objekt — der gemeldete Fehler.                      */
+    const windLive = this._pathWindingXZ(this.pts, w.box);
+    if (Math.abs(windLive) <= (this.p.wrapWindTol || 0.6)) return true;   // nicht gewickelt
+    if (Math.abs(windLive) > (this.p.wrapWindMax || 7.5)) return true;    // durchgerutscht
+    if (idx !== undefined) {
+      const red = this._rwRed || (this._rwRed = []);
+      red.length = 0;
+      for (let k = 0; k < this.pts.length; k++) if (k !== idx + 1) red.push(this.pts[k]);
+      const windRed = this._pathWindingXZ(red, w.box);
+      if (Math.abs(windLive - windRed) <= (this.p.wrapWindTol || 0.6)) return true;
+    }
+    if (this._footprintCrossed(w.box)) return true;
+    /* Obergrenze: echter Wickel kostet pro Kontakt höchstens etwa den Umfang
+       des Grundrisses (eine 90°-Biegung an einer 2,6-m-Säule ≈ 2 m). Ein
+       lokaler Umweg vom Vielfachen davon ist kein Wickel, sondern ein falsch
+       platzierter Kontakt (gemessen: 28 m pro Kontakt im Orbit-Test).      */
+    if (detour !== undefined) {
+      const mn = w.box.min, mx = w.box.max;
+      const per = 2 * ((mx[0] - mn[0]) + (mx[2] - mn[2]));
+      if (detour > per) return true;
+    }
+    this.stats.windHeld = (this.stats.windHeld || 0) + 1;
+    return false;
   }
 
   /** Läuft die eigene Route durch Geometrie? (Sackgassen-Indikator) */
@@ -649,8 +826,10 @@ class RopePathSolver {
         const directLen = vdist(prev, next);
         const wrapLen   = vdist(prev, cand) + vdist(cand, next);
         const directBlocked = (this._segBlocked(prev, next, prevBox, nextBox) !== null);
-        /* Freigabebedingung: die direkte Verbindung ist gangbar. Punkt.
-           Früher musste ZUSÄTZLICH gelten, dass das Entfernen weniger als
+        /* Freigabebedingung: die direkte Verbindung ist gangbar UND die
+           Topologie erlaubt das Loslassen (`_releaseTopoOK`): ein um die Box
+           gewickeltes Seil löst sich nicht, nur weil die Sehne frei ist — es
+           muss ausgleiten. Früher musste ZUSÄTZLICH gelten, dass das Entfernen weniger als
            `wrapReleaseTol` (5 cm) einspart — das ist fast nie der Fall, denn
            eine echte Umlenkung kostet immer mehr. Folge: Kontakte blieben
            praktisch für immer kleben, häuften sich auf (bis zu 4) und der Pfad
@@ -669,7 +848,7 @@ class RopePathSolver {
            gegen die Fläche gezogen und kann nur über eine Kante abrutschen,
            nie durch bloße Sichtfreiheit verschwinden. Mit der globalen Regel
            glitchte das Seil vollständig durch das Objekt.                    */
-        const unnecessary = !directBlocked;
+        const unnecessary = !directBlocked && this._releaseTopoOK(w, wrapLen - directLen, i);
         /* Physikalische Plausibilitäts-Schranke.
            Eine Umlenkung um eine Box kann niemals wesentlich mehr Seil kosten
            als die Ausdehnung der Box selbst — das Seil liegt an der Kante an und
@@ -701,9 +880,18 @@ class RopePathSolver {
           const dSeg = (closestOnSegment(this._bogT || (this._bogT = v3()), cand, prev, next),
                         vdist(cand, this._bogT));
           if (detour > diag*1.35 + P.wrapClearance*6 || dSeg > Math.max(9, cross*1.5 + 1)) {
-            w._dead = true;
-            this.stats.bogusDropped = (this.stats.bogusDropped || 0) + 1;
-            continue;
+            /* Auch der Bogus-Drop ist ein ENTFERNEN und bekommt deshalb dieselbe
+               topologische Schranke wie die Freigabe: ein um die Box gewickeltes
+               Seil darf nicht durch eine Plausibilitäts-Schranke verschwinden.
+               Echte Solver-Irrtümer (der Fall, für den der Drop existiert:
+               Kontakt 12 m neben der echten Wicklung) haben Umlaufwinkel ≈ 0
+               und werden weiterhin sofort verworfen.                        */
+            if (!this._releaseTopoOK(w, detour, i)) { this.stats.bogusWindHeld = (this.stats.bogusWindHeld || 0) + 1; }
+            else {
+              w._dead = true;
+              this.stats.bogusDropped = (this.stats.bogusDropped || 0) + 1;
+              continue;
+            }
           }
         }
         const rel = Math.max(1e-4, P.wrapReleaseHold);

@@ -247,6 +247,27 @@ weil Kette und Längen-Offset glätten, aber die Solver-Messgröße springt
 weiter. Preis: `bench.js` D (nur Pfad-Solver) 58,7 → 105,5 µs/Aufruf für die
 Referenzrechnung, C +11 % — absolut ≈ 1,5 ms/s Laufzeit.
 
+**Folge-Commit: topologische Freigabeschranke.** Der Skizzen-Fall
+(`uploads/image.png`: zwei Umlenkungen an einer dünnen Säule, Spieler wechselt
+die Seite, Sicht auf den Anker wird frei) war damit noch nicht erfasst — er
+entsteht nicht in der Sackgasse, sondern in der Release-Regel selbst: die
+lokale Sehne wird frei, sobald die Sichtlinie frei ist, und alle Kontakte
+lösen sich binnen weniger Ticks, obwohl das Seil topologisch um die
+Objektseite liegt (Umlaufwinkel in der Draufsicht ≈ π). Neu gilt deshalb
+`_releaseTopoOK`: ein Kontakt an einer Box, um die die Route gewickelt ist,
+wird nicht freigegeben (Ausnahmen: er steht am Kantenende und kann real
+ausgleiten, die Route ist bereits durch den Grundriss defekt, oder der
+lokale Umweg überschreitet den Objektumfang — dann ist er kein Wickel,
+sondern Solver-Müll). Dieselbe Schranke gilt für den Bogus-Drop und den
+Resync; oberhalb `wrapWindMax` (≈ 430°) gilt das Seil als durchgerutscht,
+damit die Schranke im Dauer-Orbit keine Spirale konserviert, die das
+Kantenpunkt-Modell nicht darstellen kann.
+
+Regressionstest `test_wrap.js` W9 arretiert den Skizzen-Fall (dünner Mast,
+Seitenwechsel bei freier Sicht): Basisbauart verletzt W9b/W9d/W9e (0 Kontakte,
+1,61 m Sprung, 12 blockierte Segmente), der aktuelle Stand hält (2 Kontakte,
+Umlaufwinkel 181° erhalten, 0,04 m Sprung, 0 blockierte Segmente).
+
 `test_sim.js` bleibt vollständig grün (179/179); in 13d wurde die
 Messvorbedingung `slackMax > 2` auf `> 1,2` korrigiert, weil 4,2 m
 freigesetztes Spiel ein Symptom des Defekts waren und kein Ziel — mit dem

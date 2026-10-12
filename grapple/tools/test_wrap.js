@@ -331,6 +331,86 @@ xok(runs.every(r => r.maxDetour < 1.0), 'W7 [XFAIL] kein stehen gebliebener Umwe
 xok(runs.every(r => r.releasesWithJump === 0), 'W8 [XFAIL] Freisetzen einer Wicklung ohne Längensprung',
     `${runs.reduce((s, r) => s + r.releasesWithJump, 0)} von ${runs.reduce((s, r) => s + r.releases, 0)} Freisetzungen springen > 0,5 m`);
 
+/* --------------------------------------------------------------------------
+   W9 — SKIZZEN-FALL (uploads/image.png, Nutzervideo Frames 5s/8s/9s):
+   Seil mit wenigen Umlenkungen um ein DÜNNES Objekt gewickelt, Spieler
+   wechselt auf die andere Seite, Sicht auf den Anker wird frei. Das Seil
+   darf sich dadurch NICHT auflösen: es liegt topologisch um die Objektseite
+   und kann nur über Kanten ausgleiten. Vor der topologischen
+   Freigabeschranke (`wrapWindTol`, `_releaseTopoOK`, 2026-10-13) löste die
+   lokale Sehnen-Regel hier alle Kontakte und das Seil stand schlagartig als
+   direkte Linie neu da — der gemeldete Fehler.                              */
+console.log('\n═══ W9. Skizzen-Fall: Seitenwechsel löst die Wicklung nicht auf ═══');
+{
+  const w = new E.World(); w.gravity = -26;
+  w.addBox([-60,-2,-60],[60,0,60],{color:[1,1,1]});
+  w.addBoxCS([0,13,0],[1.2,26,1.2],{color:[.1,.1,.12]});   // dünner Mast
+  let ANCHOR = [3, 8.0, -3];                          // nordöstlich, ohne Box
+  const S = new E.RopePathSolver(w, Object.assign({}, E.ROPE_DEFAULTS));
+  const dt = 1/120;
+  const wind = (pts) => {
+    let sum = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const L = Math.hypot(b[0]-a[0], b[2]-a[2]);
+      const n = Math.max(1, Math.min(16, Math.ceil(L / 0.4)));
+      let px = a[0], pz = a[2];
+      for (let k = 1; k <= n; k++) {
+        const u = k/n;
+        const qx = a[0]+(b[0]-a[0])*u, qz = a[2]+(b[2]-a[2])*u;
+        const cr = px*qz - pz*qx, do_ = px*qx + pz*qz;
+        if (Math.abs(cr) > 1e-12 || do_ > 0) sum += Math.atan2(cr, do_);
+        px = qx; pz = qz;
+      }
+    }
+    return sum;
+  };
+  let A = [-3, 1.5, 3];                                    // südwestlich ⇒ Wicklung
+  S.solve(A, ANCHOR, dt, null, null); S.converge();
+  const wind0 = wind(S.pts);
+  const wraps0 = S.wraps.length;
+  /* Seite der Wicklung merken und auf die GEGENSEITE laufen */
+  let cx0 = 0;
+  for (const q of S.wraps) cx0 += q.p[0];
+  cx0 /= Math.max(1, S.wraps.length);
+  const east = cx0 < 0;                                    // Wicklung west ⇒ ostwärts laufen
+  const WAY = east
+    ? [[-2.2,1.5,3.8],[-1,1.5,4.2],[0.5,1.5,4.2],[2,1.5,3.8],[3.2,1.5,3],[4,1.5,2],[4.5,1.5,1]]
+    : [[2.2,1.5,3.8],[1,1.5,4.2],[-0.5,1.5,4.2],[-2,1.5,3.8],[-3.2,1.5,3],[-4,1.5,2],[-4.5,1.5,1]];
+  let maxJump = 0, prevLen = S.length, minWraps = 99, blocked = 0, minAbsWind = 99, signFlip = false;
+  const sign0 = Math.sign(wind0) || 1;
+  const seg = (a,b) => { let t0=0,t1=1;
+    for (let k=0;k<3;k++){const mn=w.statics[1].min[k]+0.03,mx=w.statics[1].max[k]-0.03,d=b[k]-a[k];
+      if(Math.abs(d)<1e-12){if(a[k]<=mn||a[k]>=mx)return false;}
+      else{let ta=(mn-a[k])/d,tb=(mx-a[k])/d;if(ta>tb){const x=ta;ta=tb;tb=x;}t0=Math.max(t0,ta);t1=Math.min(t1,tb);if(t0>=t1)return false;}}
+    return true; };
+  for (const wp of WAY) {
+    const from = A.slice();
+    const L = E.vdist(from, wp);
+    const steps = Math.max(1, Math.round(L / (3.0 * dt * 4)));   // ≈ 3 m/s
+    for (let i = 1; i <= steps; i++) {
+      const u = i / steps;
+      A = [from[0]+(wp[0]-from[0])*u, from[1]+(wp[1]-from[1])*u, from[2]+(wp[2]-from[2])*u];
+      S.solve(A, ANCHOR, dt, null, null);
+      maxJump = Math.max(maxJump, Math.abs(S.length - prevLen)); prevLen = S.length;
+      minWraps = Math.min(minWraps, S.wraps.length);
+      const wd = wind(S.pts);
+      minAbsWind = Math.min(minAbsWind, Math.abs(wd));
+      if (Math.sign(wd) !== sign0 && Math.abs(wd) > 0.3) signFlip = true;
+      for (let k = 0; k < S.pts.length-1; k++) if (seg(S.pts[k], S.pts[k+1])) blocked++;
+    }
+  }
+  ok(wraps0 >= 1 && Math.abs(wind0) > 1.0, 'W9a: Ausgangszustand ist eine echte Wicklung',
+     `${wraps0} Kontakte, Umlaufwinkel ${(wind0*180/Math.PI).toFixed(0)}°`);
+  ok(minWraps >= 1, 'W9b: nach dem Seitenwechsel bleibt mindestens eine Umlenkung',
+     `min. ${minWraps} Kontakte (Sicht auf den Anker ist frei)`);
+  ok(!signFlip && minAbsWind > 1.0, 'W9c: Wicklungsrichtung bleibt erhalten — kein Seitenwechsel durchs Objekt',
+     `min. |Umlaufwinkel| ${(minAbsWind*180/Math.PI).toFixed(0)}°`);
+  ok(maxJump < 0.5, 'W9d: kein Längensprung beim Seitenwechsel',
+     `max. ${maxJump.toFixed(2)} m pro Schritt`);
+  ok(blocked === 0, 'W9e: Pfad bleibt dabei kollisionsfrei', `${blocked} blockierte Segmente`);
+}
+
 /* ============================== Ausgabe ================================== */
 console.log('\n══════════════════════ ERGEBNIS ══════════════════════');
 for (const [st, name, detail] of results) {
