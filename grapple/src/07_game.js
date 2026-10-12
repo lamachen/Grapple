@@ -369,15 +369,27 @@ class Game {
     const fwd = qForward(this._vmF || (this._vmF = v3()), q);
     const right = qRight(this._vmR || (this._vmR = v3()), q);
     const up = qUp(this._vmU || (this._vmU = v3()), q);
-    /* Fester Mündungspunkt, bewusst OHNE Neigen zum Anker: das frühere
-       0,16-m-Mitneigen verschob den Austritt bei jeder Blick- oder
-       Ankerbewegung und addierte eine eigene Richtungsänderung direkt vor
-       der Linse. Design: Spider-Man — das Seil kommt aus der Hand und sonst
-       nirgendwoher; zwischen Mündung und Anker entscheidet allein die
-       Simulation über die Richtung.                                        */
     o[0] = eye[0] + right[0]*0.155 + fwd[0]*0.30 - up[0]*0.125;
     o[1] = eye[1] + right[1]*0.155 + fwd[1]*0.30 - up[1]*0.125;
     o[2] = eye[2] + right[2]*0.155 + fwd[2]*0.30 - up[2]*0.125;
+    /* Im ATTACHED-Zustand fest OHNE Neigen zum Anker: das frühere 0,16-m-
+       Mitneigen verschob den Austritt bei jeder Blick- oder Ankerbewegung
+       und addierte eine eigene Richtungsänderung direkt vor der Linse.
+       Design: Spider-Man — das Seil kommt aus der Hand und sonst nirgendwo-
+       her; zwischen Mündung und Anker entscheidet allein die Simulation.
+       Im FLUG dagegen ist die Mündung nur Render-Vorspann (der Ketten-Pin
+       liegt dort an der echten Hand am Körper, `handPin = this.hand`), und
+       das leichte Mitneigen zur Hakenspitze richtet dieses Verbindungsstück
+       zum Flugweg aus — ohne es knickt der Stub beim Abschuss nach unten
+       weg (Nutzer-Rückmeldung nach cecc34f).                               */
+    if (R.phase === 1) {
+      const tgt = R.farEndRef();
+      const d = vnormSafe(vsubNew(tgt, eye), fwd[0], fwd[1], fwd[2]);
+      o[0] += (d[0]-fwd[0])*0.16; o[1] += (d[1]-fwd[1])*0.16; o[2] += (d[2]-fwd[2])*0.16;
+      const ox = o[0]-eye[0], oy = o[1]-eye[1], oz = o[2]-eye[2];
+      const sc = 0.3617 / (Math.sqrt(ox*ox+oy*oy+oz*oz) || 1e-6);
+      o[0] = eye[0]+ox*sc; o[1] = eye[1]+oy*sc; o[2] = eye[2]+oz*sc;
+    }
     return o;
   }
 
@@ -622,16 +634,34 @@ class Game {
     const R = this.rope;
     if (R.phase === 0) { this._ropeCount = 0; return; }
     const curve = R.buildRenderCurve(this._curve);
-    /* KEINE vorangestellten Hand-Stützpunkte mehr: die Kurve beginnt bereits
-       exakt am Ketten-Pin (Node 0 wird in _stepChain jeden Schritt auf
-       visualHand gesetzt), Hand- und Mittelpunkt voranzustellen erzeugte
-       also DREI identische Stützpunkte am Seilanfang. Catmull-Rom hat dort
-       keine definierte Tangente mehr — sichtbar als Knick/Wulst 0,36 m vor
-       dem Auge, also genau dort, wo die Perspektive alles verstärkt.       */
+    /* Voranstellung der sichtbaren Hand NUR wenn die Kurve nicht ohnehin dort
+       beginnt. Im ATTACHED-Zustand liegt der Ketten-Pin auf visualHand (Node 0
+       wird in _stepChain jeden Schritt dorthin gesetzt) — Hand und Mittelpunkt
+       voranzustellen erzeugte dann DREI identische Stützpunkte am Seilanfang:
+       Null-Segmente, undefinierte Bandgeometrie, sichtbar als Knick/Wulst
+       0,36 m vor dem Auge. Im FLUG dagegen pinnt die Kette an der echten Hand
+       am Körper (`handPin = this.hand`), die Mündung ist reiner Render-Start:
+       ohne Verbindungsstück würde das Seil unten an der Körper-Hand beginnen
+       und mit dem Schlaffseil sofort nach unten wegzucken (Nutzer-Rückmeldung
+       nach cecc34f). Deshalb: Distanz prüfen, 1–2 Stützpunkte nur bei echtem
+       Abstand, nie bei deckungsgleichen Punkten.                           */
     const n = curve.count;
-    const total = n;
     const buf = this._ropeBuf;
-    buf.set(curve.buf.subarray(0, n*3), 0);
+    const hand = R.visualHand || R.hand;
+    let pre = 0;
+    if (n > 0) {
+      const d0 = Math.hypot(hand[0]-curve.buf[0], hand[1]-curve.buf[1], hand[2]-curve.buf[2]);
+      if (d0 > 0.05) {
+        buf[0]=hand[0]; buf[1]=hand[1]; buf[2]=hand[2];
+        pre = 1;
+        if (d0 > 0.30) {
+          buf[3]=(hand[0]+curve.buf[0])*0.5; buf[4]=(hand[1]+curve.buf[1])*0.5; buf[5]=(hand[2]+curve.buf[2])*0.5;
+          pre = 2;
+        }
+      }
+    }
+    buf.set(curve.buf.subarray(0, n*3), pre*3);
+    const total = n + pre;
     this._ropeCount = total;
 
     const cam = r.camPos;
