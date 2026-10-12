@@ -369,17 +369,15 @@ class Game {
     const fwd = qForward(this._vmF || (this._vmF = v3()), q);
     const right = qRight(this._vmR || (this._vmR = v3()), q);
     const up = qUp(this._vmU || (this._vmU = v3()), q);
+    /* Fester Mündungspunkt, bewusst OHNE Neigen zum Anker: das frühere
+       0,16-m-Mitneigen verschob den Austritt bei jeder Blick- oder
+       Ankerbewegung und addierte eine eigene Richtungsänderung direkt vor
+       der Linse. Design: Spider-Man — das Seil kommt aus der Hand und sonst
+       nirgendwoher; zwischen Mündung und Anker entscheidet allein die
+       Simulation über die Richtung.                                        */
     o[0] = eye[0] + right[0]*0.155 + fwd[0]*0.30 - up[0]*0.125;
     o[1] = eye[1] + right[1]*0.155 + fwd[1]*0.30 - up[1]*0.125;
     o[2] = eye[2] + right[2]*0.155 + fwd[2]*0.30 - up[2]*0.125;
-    if (R.phase !== 0) {
-      const tgt = R.phase === 1 ? R.farEndRef() : R.anchor;
-      const d = vnormSafe(vsubNew(tgt, eye), fwd[0], fwd[1], fwd[2]);
-      o[0] += (d[0]-fwd[0])*0.16; o[1] += (d[1]-fwd[1])*0.16; o[2] += (d[2]-fwd[2])*0.16;
-      const ox = o[0]-eye[0], oy = o[1]-eye[1], oz = o[2]-eye[2];
-      const sc = 0.3617 / (Math.sqrt(ox*ox+oy*oy+oz*oz) || 1e-6);
-      o[0] = eye[0]+ox*sc; o[1] = eye[1]+oy*sc; o[2] = eye[2]+oz*sc;
-    }
     return o;
   }
 
@@ -624,14 +622,16 @@ class Game {
     const R = this.rope;
     if (R.phase === 0) { this._ropeCount = 0; return; }
     const curve = R.buildRenderCurve(this._curve);
-    // sichtbare Hand voranstellen (2 Stützpunkte für weichen Übergang)
+    /* KEINE vorangestellten Hand-Stützpunkte mehr: die Kurve beginnt bereits
+       exakt am Ketten-Pin (Node 0 wird in _stepChain jeden Schritt auf
+       visualHand gesetzt), Hand- und Mittelpunkt voranzustellen erzeugte
+       also DREI identische Stützpunkte am Seilanfang. Catmull-Rom hat dort
+       keine definierte Tangente mehr — sichtbar als Knick/Wulst 0,36 m vor
+       dem Auge, also genau dort, wo die Perspektive alles verstärkt.       */
     const n = curve.count;
-    const total = n + 2;
+    const total = n;
     const buf = this._ropeBuf;
-    const hand = R.visualHand || R.hand;
-    buf[0]=hand[0]; buf[1]=hand[1]; buf[2]=hand[2];
-    buf[3]=(hand[0]+curve.buf[0])*0.5; buf[4]=(hand[1]+curve.buf[1])*0.5; buf[5]=(hand[2]+curve.buf[2])*0.5;
-    buf.set(curve.buf.subarray(0, n*3), 6);
+    buf.set(curve.buf.subarray(0, n*3), 0);
     this._ropeCount = total;
 
     const cam = r.camPos;
