@@ -41,6 +41,7 @@ Abhängigkeiten, kein Netzwerk). Entsteht aus `src/*.js` + `tools/template.html`
 | Datei | Was sie trägt |
 |---|---|
 | `README.md` (diese) | Start, Steuerung, Verifikation, Struktur |
+| [doc/MELDUNGEN.md](doc/MELDUNGEN.md) | ★ **Erster Halt ohne Vorwissen.** Welche Symptome gemeldet wurden und ihr Status, welche Befunde aus der externen Analyse abgearbeitet sind, was offen hängt, und wie man eine neue Meldung abarbeitet |
 | [doc/ARCHITEKTUR.md](doc/ARCHITEKTUR.md) | ★ **Warum** das System so gebaut ist. 20 Kapitel, Messwerte, bekannte Grenzen mit Defekt-Nummern (#35 … #53), Portierungshinweise |
 | [doc/VERLAUF-PIVOT.md](doc/VERLAUF-PIVOT.md) | Arbeitsstand des laufenden Experiments: Ausgangslage, Glossar, jede Messung mit Zahlen, die verworfenen Wege, die offene Entscheidung |
 
