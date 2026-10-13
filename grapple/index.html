@@ -5690,6 +5690,10 @@ class Game {
        zwischen Physik (=_hand) und Render (=_ropeOrigin). Je nach Substep-Zahl
        wäre sonst der Snapshot-Slot ein ANDERES Objekt als der Apply-Slot. */
     add(P.pos); add(R.hand); add(this._hand); add(H.pos);
+    /* Anker nur dann interpolieren, wenn er an einem bewegten Körper hängt (er fährt
+       dann mit dessen interpolierter Position mit). Wechselt die Zielliste, mischt
+       _applyInterp in diesem Frame nicht — ein frischer Einhaker verschmiert also nie. */
+    if (R.anchorBody && R.attached) add(R.anchor);
     if (C && C.pos) for (let i = 0; i < C.n; i++) add(C.pos[i]);
     for (const b of this.world.bodies) add(b.pos);
     return t;

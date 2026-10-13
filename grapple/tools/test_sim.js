@@ -597,6 +597,9 @@ console.log('\n═══ 9c. raycast sieht Körper vor statischer Geometrie ═�
      h2 ? `t=${h2.t.toFixed(2)} ${h2.body ? 'Kiste' : 'Wand'}` : 'kein Treffer');
   const h3 = w4.raycast([-10,1,0],[1,0,0],60,{ ropeOnly:true });
   ok(h3 && h3.body === crate4, 'raycast: ropeOnly findet die Kiste ebenfalls');
+  const h4 = w4.raycast([-10,1,0],[1,0,0],60,{ skip:crate4 });
+  ok(h4 && !h4.body && Math.abs(h4.t-30) < 1e-6, 'raycast: skip überspringt die Kiste weiterhin (Wand dahinter wird gemeldet)',
+     h4 ? `t=${h4.t.toFixed(2)} ${h4.body ? 'Kiste' : 'Wand'}` : 'kein Treffer');
 }
 
 /* ========================================================================== */
