@@ -408,6 +408,56 @@ console.log('\n═══ 6. Pendel: Energie bleibt erhalten, kein Aufschaukeln, 
 }
 
 /* ========================================================================== */
+console.log('\n═══ 6b. Capstan bremst Seilgleiten, nicht das Pendeln quer dazu ═══');
+{
+  const w = mkWorld(0);                                   // Gravitation 0: reine Reibungs-Prüfung
+  w.addBoxCS([0,0,0],[1.5,8,8],{color:[.6,.6,.65]});      // Wand zwischen Anker und Spieler
+  const s = mkSim(w, { tautMargin: 0.0 });
+  const ANCHOR = [-6,0,0], POS = [6,3,0];
+  E.vset(s.player.pos, POS[0],POS[1],POS[2]); E.vset(s.player.vel, 0,0,0);
+  s.rope.attachAt(ANCHOR,[0,1,0],null,null, E.vdist(POS,ANCHOR)+2.0);
+  s.rope.settleActive = false; s.rope.phase = 3;
+  for (let i=0;i<30;i++) s.rope.step(1/120, POS, null, [0,0,0]);
+  s.rope.budget = s.rope.required + 0.02;
+  const fs6 = (sim) => {
+    w.stepBodies(1/60);
+    const chest = sim.player.chestPoint(E.v3());
+    sim.rope.step(1/60, chest, null, sim.player.vel);
+    sim.player.update(1/60, INPUT_IDLE, sim.rope);
+  };
+  for (let i=0;i<10;i++) fs6(s);
+  const wr0 = s.rope.path.wraps.length, ang0 = s.rope.totalWrapAngle();
+  /* Stoß entlang der Kante (z): reines Pendeln um die Umlenkung — die
+     Pfadlänge ändert sich dabei nicht, also gleitet kein Seil über die
+     Kante und der Capstan-Term muss die Bewegung erhalten.               */
+  s.player.vel[2] = 5.0;
+  const v0 = 5.0;
+  let vT = v0;
+  /* Bei g=0 ist der Querstoß eine Orbit-Bewegung: die Richtung rotiert in
+     der n-z-Ebene, der BETRAG muss erhalten bleiben (Pendel-Orbit ohne
+     Schwerkraft). |vz| allein zu messen wäre falsch.                      */
+  for (let i=0;i<90;i++) { fs6(s); vT = E.vlen(s.player.vel); }
+  ok(wr0 >= 1 && ang0 > 0.3, '6b: Szenario hat echte Umlenkung',
+     `${wr0} Kontakte, Wrap-Winkel ${(ang0*180/Math.PI).toFixed(0)}°`);
+  ok(vT > v0 * 0.75, '6b: Querschwingung wird nicht weggedämpft (Capstan nur längs)',
+     `nach 1,5 s noch ${(vT/v0*100).toFixed(0)} % der Tangentialgeschwindigkeit`);
+  /* Gegenprobe: Stoß in Längsrichtung (Seil gleitet über die Kante) MUSS
+     messbar gedämpft werden — sonst wäre die Reibung wirkungslos.        */
+  const s2 = mkSim(w, { tautMargin: 0.0 });
+  E.vset(s2.player.pos, POS[0],POS[1],POS[2]); E.vset(s2.player.vel, 0,0,0);
+  s2.rope.attachAt(ANCHOR,[0,1,0],null,null, E.vdist(POS,ANCHOR)+2.0);
+  s2.rope.settleActive = false; s2.rope.phase = 3;
+  for (let i=0;i<30;i++) s2.rope.step(1/120, POS, null, [0,0,0]);
+  s2.rope.budget = s2.rope.required + 0.6;               // etwas Spiel, damit Zug Richtung Kante gleitet
+  for (let i=0;i<10;i++) fs6(s2);
+  const n = E.vsubNew(ANCHOR, s2.player.pos); E.vnorm(n, n);
+  s2.player.vel[0] = -n[0]*5; s2.player.vel[1] = -n[1]*5; s2.player.vel[2] = -n[2]*5;  // weg vom Anker = Gleiten
+  let vL = 5.0;
+  for (let i=0;i<30;i++) { fs6(s2); const vv = s2.player.vel; vL = Math.abs(vv[0]*n[0]+vv[1]*n[1]+vv[2]*n[2]); }
+  ok(vL < 5.0 * 0.7, '6b: Längsbewegung (Seil gleitet über die Kante) wird gedämpft',
+     `nach 0,5 s noch ${(vL/5*100).toFixed(0)} % der Längsgeschwindigkeit`);
+}
+
 console.log('\n═══ 7. Umlenkung: Seil über eine Wand (2 Kontakte, Länge > Luftlinie) ═══');
 {
   const w = mkWorld();

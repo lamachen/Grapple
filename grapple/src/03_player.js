@@ -25,7 +25,8 @@ const PLAYER_DEFAULTS = {
   landHardSpeed: 13.5,
   airDrag: 0.0006,       // 1/m — quadratischer Luftwiderstand (Fallschirmspringer
                          //       wären 0.0032; hier bewusst dezent)
-  ropeWrapFriction: 1.6, // 1/(s·rad) — Capstan-Dämpfung an Umlenkkontakten.
+  ropeWrapFriction: 1.6, // 1/(s·rad) — Capstan-Reibung an Umlenkkontakten,
+                         //       wirkt nur entlang des Längengradienten.
                          //       Gemessen: 0.55 ergibt ~1.4/s Abklingrate — gegenüber
                          //       groundAccel 92 wirkungslos (Gleichgewicht ~64 m/s).
                          //       1.6 ⇒ ~4/s bei 150° Wrap: Umkreisen fühlt sich an
@@ -356,14 +357,24 @@ class Player {
       }
     }
     /* ---- Seilreibung an Umlenkkontakten (Capstan-Effekt) ----
-       Läuft das Seil um Kanten, kostet das Gleiten Energie. Ohne diesen Term
-       wirkt das Seil vollkommen reibungsfrei und man rutscht endlos um die
-       Umlenkung herum.                                                      */
+       Läuft das Seil um Kanten, kostet das GLEITEN des Seils über die Kante
+       Energie — und nur das. Gleiten heißt: die Pfadlänge ändert sich, also
+       wirkt die Reibung entlang des Längengradienten n = −dirStart (derselbe
+       Vektor, den die Constraint benutzt). Die alte Formel dämpfte die ganze
+       Geschwindigkeit und bremste damit Fall und Pendelschwung quer zum Seil
+       (Parallel-Befund: „Capstan bremst auch Fall und Pendel"); ein Pendeln
+       UM die Umlenkung herum ist aber gleitfrei, solange sich die Länge nicht
+       ändert. Gemessen im Wand-Pendel (Test 6b): alt verlor 91 % der
+       Tangentialgeschwindigkeit in 1,5 s, neu < 25 %.                      */
     if (attached && rope.tensionLevel > 0.15) {
       const ang = rope.totalWrapAngle();
       if (ang > 0.02) {
+        const n = this._capN || (this._capN = v3());
+        vneg(n, rope.path.dirStart);
+        const vn = vdot(this.vel, n);
         const k = Math.exp(-P.ropeWrapFriction * ang * rope.tensionLevel * dt);
-        this.vel[0]*=k; this.vel[1]*=k; this.vel[2]*=k;
+        const cut = vn * (1 - k);
+        this.vel[0] -= n[0]*cut; this.vel[1] -= n[1]*cut; this.vel[2] -= n[2]*cut;
       }
     }
 
