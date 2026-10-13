@@ -39,7 +39,8 @@ Abhängigkeiten außer Node und Python-Standardbibliothek.
 | 2 | `doc/MELDUNGEN.md` | Welche Symptome gemeldet wurden und ihr Status (M1…M9), welche externe Befunde abgearbeitet sind, was offen hängt |
 | 3 | **diese Datei**, §3–§5 | Der konkrete Auftrag und was dazwischenkommt |
 | 4 | `doc/ARCHITEKTUR.md` | Warum das System so gebaut ist. 20 Kapitel. §17 „Ehrliche Grenzen" und §20 |
-| 5 | `doc/VERLAUF-PIVOT.md` | Arbeitsverlauf: Glossar, jede Messung mit Zahlen, **§10b (die beiden Korrekturen eigener Schlüsse)**, §13b (Prioritäten), §15 (15 verworfene Wege) |
+| 5 | `doc/VERLAUF-PIVOT.md` | Arbeitsverlauf: Glossar, jede Messung mit Zahlen, **§10b (die beiden Korrekturen eigener Schlüsse)**, §13b (Prioritäten), §15 (17 verworfene Wege) |
+| 6 | `doc/VORHABEN-mantle.md` | Fertige Spezifikation eines **geplanten, nicht gebauten** Umbaus: Mantle/Vault als Familie von Ergebnissen statt einer Stärke, plus `aimLayer` als wiederverwendbare Kopf-Orientierung. Mit Ist-Messung, Historie, Abnahmekriterien und offenen Fragen |
 
 `doc/ARCHITEKTUR.md` ist das eigentliche Ergebnisdokument dieses Projekts. Wer nur eine Datei
 liest, liest diese — aber **nicht bevor** README „Orientsierung" und `MELDUNGEN.md` durch sind.
@@ -111,6 +112,28 @@ Punkt in Kantenmitte suchte — dort gibt es keine. Ein externer Prototyp löste
 auf einem **Eckpunkt** als eigener Typ, Übergang Kante→Ecke→Kante gesteuert über `tRaw`/`elen`
 (also „wandert der Berührpunkt über das Kantenende hinaus?"), nicht über „welches Ende ist näher".
 Details und die ausdrückliche Kennzeichnung als *nicht überprüfbar*: `doc/VERLAUF-PIVOT.md` §10b.5.
+
+### P6 — Mantle/Vault: Ergebnis aus den Kontaktbedingungen statt einer Stärke
+
+**Geplant, nicht gebaut — Spezifikation liegt fertig in `doc/VORHABEN-mantle.md`.** Vom
+Projekteigner vorgegeben, ausdrücklich als Dokumentation vor der Implementation.
+
+Kurz: Heute gibt es EINE Feder (`strength 34`, `duration 0.6`, `gScale *= 0.15`) für alle
+Kantenhöhen und alle Ankunftsgeschwindigkeiten, plus **null** Kamera-Feedback. Gefordert ist eine
+Familie von Ergebnissen, die aus `dh` (Höhendifferenz), `dBody` (Kante relativ am Körper — Fuß /
+Knie / Hüfte / Bauch / Brust / ausgestreckte Arme), `vFwd` und `vUp` folgt: von „knallt gegen die
+Wand, kein Hochziehen" (nur mit den Fingerspitzen an der Kante) bis „Speed-Vault in einer
+durchgehenden Bewegung weiterrennen" (Kante auf Bauchhöhe mit Vorwärtsschwung). Dazu ein
+wiederverwendbarer `aimLayer`: Das System gibt in manchen Situationen eine Welt-Zielrichtung des
+Kopfes vor **und** die erlaubte lokale Abweichung, der Spieler steuert innerhalb des Kegels weiter
+selbst — nie volle Übernahme.
+
+Gemessen und belegt: eine Nick-Animation hat es **nie** gegeben (`vault` kommt in allen 36 Commits
+ausschließlich in `03_player.js` vor, `dip` wird nur von Landung und Seilzug angestoßen). Was sich
+„schwächer als zu Beginn" anfühlt, ist `gScale *= 0.15` plus fehlendes Kamera-Feedback plus der
+Kontrast zur seit `07603b7` griffigeren übrigen Physik.
+
+`tools/probe_vault.js` ist die Nullmessung dazu (5 Szenarien, deterministisch).
 
 ### P5 — Rein visuell, unberührt seit der externen Analyse
 

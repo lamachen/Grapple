@@ -45,6 +45,7 @@ Abhängigkeiten, kein Netzwerk). Entsteht aus `src/*.js` + `tools/template.html`
 | [doc/MELDUNGEN.md](doc/MELDUNGEN.md) | Welche Symptome gemeldet wurden und ihr Status (M1…M9), welche Befunde aus der externen Analyse abgearbeitet sind, was offen hängt, und wie man eine neue Meldung abarbeitet |
 | [doc/ARCHITEKTUR.md](doc/ARCHITEKTUR.md) | ★ **Warum** das System so gebaut ist. 20 Kapitel, Messwerte, bekannte Grenzen mit Defekt-Nummern (#35 … #53), Portierungshinweise |
 | [doc/VERLAUF-PIVOT.md](doc/VERLAUF-PIVOT.md) | Arbeitsstand des laufenden Experiments: Ausgangslage, Glossar, jede Messung mit Zahlen, die verworfenen Wege, die offene Entscheidung |
+| [doc/VORHABEN-mantle.md](doc/VORHABEN-mantle.md) | **Geplant, nicht gebaut.** Spezifikation für Mantle/Vault (Ergebnis folgt aus den Kontaktbedingungen) und den wiederverwendbaren `aimLayer` — mit Ist-Messung, Historie, Abnahmekriterien |
 
 **Die vier Fallen.**
 
