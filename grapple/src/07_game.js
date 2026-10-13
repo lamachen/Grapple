@@ -46,7 +46,7 @@ class Game {
     this.audio = new RopeAudio();
 
     this.input = { forward:false, back:false, left:false, right:false, slide:false, slideHeld:false,
-                   jumpPressed:false, firePressed:false, releasePressed:false, fireHeld:false,
+                   jumpPressed:false, jumpHeld:false, firePressed:false, releasePressed:false, fireHeld:false,
                    mouseX:0, mouseY:0, reelDir:0 };
     this.sens = 0.0015;
     this.freeLookSensScale = 1.7;   // Multiplikator, wenn der Zeiger nicht gesperrt ist
@@ -99,7 +99,14 @@ class Game {
     };
     window.addEventListener('keydown', e => {
       if (keymap[e.code]) { this.input[keymap[e.code]] = true; e.preventDefault(); }
-      if (e.code === 'Space') { this.input.jumpPressed = true; e.preventDefault(); }
+      /* Space: jumpPressed ist eine ECHTE Kante (ohne e.repeat). Sonst liefert
+         der Tastatur-Autorepeat bei gehaltener Leertaste jeden Frame einen
+         „Sprungimpuls" — am Seil wurde daraus unbegrenztes Fliegen.         */
+      if (e.code === 'Space') {
+        if (!e.repeat) this.input.jumpPressed = true;
+        this.input.jumpHeld = true;
+        e.preventDefault();
+      }
       if (e.code === 'ShiftLeft' || e.code === 'ControlLeft' || e.code === 'KeyC') {
         this.input.slide = true; this.input.slideHeld = true; e.preventDefault();
       }
@@ -124,6 +131,7 @@ class Game {
     });
     window.addEventListener('keyup', e => {
       if (keymap[e.code]) { this.input[keymap[e.code]] = false; }
+      if (e.code === 'Space') this.input.jumpHeld = false;
       if (e.code === 'ShiftLeft' || e.code === 'ControlLeft' || e.code === 'KeyC') this.input.slideHeld = false;
       if (e.code === 'KeyQ' || e.code === 'KeyE') this.input.reelDir = 0;
     });

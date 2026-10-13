@@ -62,7 +62,7 @@ class Player {
     this.grounded = false; this.wasGrounded = false;
     this.groundNormal = v3(0,1,0); this.groundBody = null;
     this.wallNormal = null; this.wallBody = null;
-    this.coyote = 0; this.jumpBuf = 0;
+    this.coyote = 0; this.jumpBuf = 0; this.ropeJumpUsed = false; this._jumpCut = false;
     this.sliding = false; this.slideT = 0;
     this.wallRunT = 0; this.wallRunSide = 0;
     this.vaultT = 0; this.vaultTarget = v3(); this.vaulting = false;
@@ -134,7 +134,7 @@ class Player {
     // Beim Übergang in den Seil-Zustand den Sprung-Puffer verwerfen: ein kurz
     // VOR dem Feuern gedrücktes Space würde sonst im selben Moment das frisch
     // verankerte Seil wieder lösen (spürbar als "Seil reißt sofort ab").
-    if (attached && !this.wasAttached) this.jumpBuf = 0;   // Puffer nicht mitbringen
+    if (attached && !this.wasAttached) { this.jumpBuf = 0; this.ropeJumpUsed = false; }   // Puffer nicht mitbringen
     this.wasAttached = attached;
     const speed = vlen(this.vel);
     this.speed = speed;
@@ -220,7 +220,7 @@ class Player {
       if (this.jumpBuf > 0) {
         this.vel[1] = P.jumpSpeed;
         if (this.sliding) this.sliding = false;
-        this.jumpBuf = 0; this.grounded = false; this.coyote = 0;
+        this.jumpBuf = 0; this.grounded = false; this.coyote = 0; this._jumpCut = false;
         this._event = { type:'jump', p: vclone(this.pos) };
       }
     } else if (wallRunning) {
@@ -240,7 +240,7 @@ class Player {
       if (this.jumpBuf > 0) {
         this.vel[1] = wr.jumpSpeed;
         this.vel[0] += n[0]*wr.jumpAway; this.vel[2] += n[2]*wr.jumpAway;
-        this.wallRunT = P.wallRun.duration; this.jumpBuf = 0;
+        this.wallRunT = P.wallRun.duration; this.jumpBuf = 0; this._jumpCut = false;
         this.rollVel += this.wallRunSide*4.5;
         this._event = { type:'walljump', p: vclone(this.pos) };
       }
@@ -290,17 +290,25 @@ class Player {
       // 5) Sprung am Seil: KEIN Lösen. Man springt und bleibt eingehakt —
       //    sonst ist Schwingen mit Absprung praktisch unmöglich. Gelöst wird
       //    ausschließlich bewusst (Taste loslassen / R).
+      //    ABER: genau EIN Seilsprung pro Einhänge- oder Bodenkontakt. Ohne
+      //    diese Schranke war jede neue Sprungflanke (schon der Tastatur-
+      //    Autorepeat bei gehaltener Leertaste) ein voller Vertikalimpuls am
+      //    Seil = beliebiges Fliegen (Nutzer-Fund).
       if (this.jumpBuf > 0) {
-        this.vel[1] = P.jumpSpeed;
+        if (!this.ropeJumpUsed) {
+          this.vel[1] = P.jumpSpeed;
+          this.ropeJumpUsed = true;
+          this._jumpCut = false;
+          this._event = { type:'ropejump', p: vclone(this.pos) };
+        }
         this.jumpBuf = 0;
-        this._event = { type:'ropejump', p: vclone(this.pos) };
       }
       gScale = 1.0;
     } else {
       // freie Luft
       if (wl > 0.1) accelerate(this.vel, wish, P.airMaxSpeed, P.airAccel, dt);
       if (this.jumpBuf > 0 && this.coyote > 0) {
-        this.vel[1] = P.jumpSpeed; this.jumpBuf = 0; this.coyote = 0;
+        this.vel[1] = P.jumpSpeed; this.jumpBuf = 0; this.coyote = 0; this._jumpCut = false;
         this._event = { type:'jump', p: vclone(this.pos) };
       }
     }
@@ -320,6 +328,17 @@ class Player {
       this.vel[2] += ((t[2]-this.pos[2])*k - this.vel[2]*c*0.55) * dt;
       gScale *= 0.15;
       if (this.vaultT <= 0) this.vaulting = false;
+    }
+
+    /* ---- Jump-Cut: variable Sprunghöhe ----
+       Loslassen im Aufstieg kappt die Steiggeschwindigkeit einmalig um 45 %:
+       Tippen = kurzer Hopser, Halten = voller Sprung. Standard für gutes
+       Plattform-Feel, fehlte bisher völlig.
+       `input.jumpHeld === false` bewusst nur bei EXPLIZIT gemeldetem Feld:
+       Test-Harnesses ohne jumpHeld behalten das Vollsprung-Verhalten.      */
+    if (!this.grounded && input.jumpHeld === false && !this._jumpCut && this.vel[1] > 2.0) {
+      this.vel[1] *= 0.55;
+      this._jumpCut = true;
     }
 
     /* ---- Gravitation ---- */
@@ -360,7 +379,7 @@ class Player {
     W.moveCapsule(this.pos, this.vel, dt, P.radius, this.hh, this.res,
                   { stepHeight: this.sliding ? 0.25 : 0.62 });
     this.grounded = this.res.grounded;
-    if (this.grounded) { this.coyote = P.coyoteTime; this.airTime = 0; }
+    if (this.grounded) { this.coyote = P.coyoteTime; this.airTime = 0; this.ropeJumpUsed = false; }
     else this.airTime += dt;
     if (this.grounded && this.wallRunT > 0 && !this.res.wallNormal) this.wallRunT = 0;
     this.wallNormal = this.res.wallNormal;

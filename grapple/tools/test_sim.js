@@ -1845,9 +1845,90 @@ console.log('\n═══ 17. Flug: Schlaffseil-Haufen bei Annäherung wird nachg
      `slack nach 1 s Nachlauf ${slackEnd.toFixed(2)} m`);
 }
 
+
+/* ========================================================================== */
+console.log('\n═══ 18. Charakter-Physik: Sprung-Integrität mit und ohne Seil ═══');
+{
+  const w = mkWorld();
+  w.addBox([-60,-2,-60],[60,0,60],{color:[1,1,1]});
+  const mk = () => { const s = mkSim(w); s.player.spawn([0,0.86,0],0); return s; };
+  const IN = (over) => Object.assign({}, INPUT_IDLE, over);
+  const fstep = (sim, input) => {
+    w.stepBodies(1/60);
+    if (sim.hook.state !== 'idle') sim.hook.step(1/60, sim.rope, sim.player.pos);
+    const chest = sim.player.chestPoint(E.v3());
+    sim.rope.step(1/60, chest, (sim.hook.flying || sim.hook.state === 'retract') ? sim.hook.pos : null, sim.player.vel);
+    sim.player.update(1/60, input || INPUT_IDLE, sim.rope);
+  };
+
+  /* 18a: gehaltene Leertaste am straffen Seil darf NICHT tragen.
+     Ein voller Seilsprung (≈1,7 m) ist erlaubt, danach muss Schluss sein. */
+  {
+    const s = mk();
+    for (let i=0;i<30;i++) fstep(s);
+    s.rope.attachAt([0,12,0],[0,-1,0],null,null,12);
+    s.rope.settleActive = false; s.rope.phase = 3;
+    fstep(s);                                   // erst lösen, dann Budget setzen
+    s.rope.budget = s.rope.required + 0.05;
+    for (let i=0;i<30;i++) fstep(s);
+    const y0 = s.player.pos[1];
+    let maxY = y0;
+    for (let i=0;i<180;i++) { fstep(s, IN({ jumpPressed:true, jumpHeld:true })); maxY = Math.max(maxY, s.player.pos[1]); }
+    ok(maxY - y0 <= 2.4 && s.rope.attached, '18a: gehaltene Leertaste am Seil trägt nicht (kein Fliegen)',
+       `max. Höhenzunahme ${(maxY-y0).toFixed(2)} m über 3 s, Seil attached=${s.rope.attached}`);
+  }
+  /* 18b: ohne Seil gilt dasselbe — in der Luft gibt es keinen Sprung */
+  {
+    const s = mk();
+    for (let i=0;i<30;i++) fstep(s);
+    s.player.pos[1] = 10; s.player.vel[1] = 0;
+    for (let i=0;i<20;i++) fstep(s);            // Coyote-Zeit ablaufen lassen
+    let maxUp = -99;
+    for (let i=0;i<90;i++) {
+      fstep(s, IN({ jumpPressed:true, jumpHeld:true }));
+      if (s.player.grounded) break;             // nur das FREIE Fallen bewerten
+      maxUp = Math.max(maxUp, s.player.vel[1]);
+    }
+    ok(maxUp < -5, '18b: gehaltene Leertaste erzeugt im freien Fall keinen Auftrieb',
+       `max. Vertikalgeschw. im Fall ${maxUp.toFixed(2)} m/s (negativ = fällt sauber)`);  }
+  /* 18c: Jump-Cut — Tippen springt deutlich kürzer als Halten */
+  {
+    const apex = (held) => {
+      const s = mk();
+      for (let i=0;i<30;i++) fstep(s);
+      let y0 = null, top = 0;
+      for (let i=0;i<120;i++) {
+        fstep(s, IN({ jumpPressed: i === 10, jumpHeld: held ? true : i < 12 }));
+        if (y0 === null && s.player.vel[1] > 1) y0 = s.player.pos[1];
+        if (y0 !== null) top = Math.max(top, s.player.pos[1] - y0);
+      }
+      return top;
+    };
+    const aHold = apex(true), aTap = apex(false);
+    ok(aTap < aHold - 0.6 && aHold > 1.2, '18c: variable Sprunghöhe (Jump-Cut) wirkt',
+       `Scheitel Tippen ${aTap.toFixed(2)} m vs. Halten ${aHold.toFixed(2)} m`);
+  }
+  /* 18d: Bodenreibung bringt den Sprint messbar zum Stillstand */
+  {
+    const s = mk();
+    for (let i=0;i<30;i++) fstep(s);
+    for (let i=0;i<150;i++) fstep(s, IN({ forward:true }));
+    const v0 = s.player.hSpeed;
+    const p0 = [s.player.pos[0], s.player.pos[2]];
+    let t = 0;
+    while (t < 240 && s.player.hSpeed > 0.15) { fstep(s); t++; }
+    const dist = Math.hypot(s.player.pos[0]-p0[0], s.player.pos[2]-p0[1]);
+    ok(v0 > 8.5 && dist < 7.5 && t < 200, '18d: Sprint stoppt durch Bodenreibung (kein Eis)',
+       `v0 ${v0.toFixed(1)} m/s → Stillstand nach ${(t/60).toFixed(2)} s / ${dist.toFixed(2)} m`);
+  }
+}
+
+
 for (const [st, name, detail] of results) {
   console.log(` ${st==='PASS'?'✔':'✘'} ${name}${detail ? '   ·  ' + detail : ''}`);
 }
+
+
+
 console.log(`\n ${passed} bestanden, ${failed} fehlgeschlagen`);
 process.exit(failed ? 1 : 0);
-
