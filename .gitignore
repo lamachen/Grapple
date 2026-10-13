@@ -40,8 +40,12 @@ venv/
 .ruff_cache/
 
 # ── Build-Artefakte / temporäre Ausgaben ─────────────────────────
-# Hinweis: grapple/index.html ist das gebaute Artefakt und wird
-# bewusst MIT versioniert, damit das Spiel ohne Build-Schritt läuft.
+# Hinweis: grapple/index.html ist das gebaute Artefakt und wird NICHT
+# versioniert (siehe grapple/.gitignore). Es entsteht beim Push auf main
+# über .github/workflows/pages.yml (GitHub Pages) und lokal mit
+# `python3 grapple/tools/build.py`. Die Wurzel-index.html dagegen IST
+# versioniert — sie ist kein Artefakt, sondern der Pages-Einstiegspunkt
+# (Weiterleitung auf grapple/index.html).
 dist/
 build/
 out/

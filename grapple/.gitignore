@@ -1,0 +1,12 @@
+# Gebautes Artefakt: entsteht aus src/*.js + tools/template.html mit
+#   python3 tools/build.py
+# und wird beim Push auf main von .github/workflows/pages.yml gebaut und
+# auf GitHub Pages veröffentlicht.
+#
+# Warum es nicht versioniert ist: Es enthält den gesamten src-Code noch
+# einmal (345 KB, 20 % des Working Trees). Für jeden, der das Repo liest oder
+# als Kontext lädt, ist das reine Duplikation — und bei jeder Code-Änderung
+# wäre ein zweiter, 345 KB großer Diff mitgecommitet worden.
+#
+# Lokal spielen: einmal `python3 tools/build.py`, dann index.html öffnen.
+/index.html

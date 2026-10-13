@@ -1,0 +1,65 @@
+# Baut grapple/index.html aus src/*.js und veröffentlicht das Repo auf GitHub Pages.
+#
+# Warum diese Datei existiert: grapple/index.html war versioniert (345 KB, enthält den
+# gesamten src-Code noch einmal), damit das Spiel ohne Build-Schritt läuft. Für jeden,
+# der das Repo als Kontext lädt, war das der größte Einzelposten und reine Duplikation.
+# Jetzt wird es beim Push gebaut — das Repo bleibt klein, Pages funktioniert weiter.
+#
+# Voraussetzung: Im Repo unter Settings → Pages muss "Source: GitHub Actions" stehen.
+# Der Trigger ist bewusst nur `push` auf main: Der Build soll exakt den Stand veröffentlichen,
+# der auf main liegt. Feature-Branches bauen lokal mit `python3 grapple/tools/build.py`.
+name: build-and-pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # build.py braucht nur die Python-Standardbibliothek (glob, os, sys, io).
+      - name: index.html bauen
+        run: python3 grapple/tools/build.py
+
+      - name: Gebautes Artefakt prüfen
+        run: |
+          test -s grapple/index.html || { echo "grapple/index.html fehlt oder ist leer"; exit 1; }
+          printf 'gebaut: %s Bytes\n' "$(stat -c%s grapple/index.html)"
+
+      # Die Wurzel-index.html (Weiterleitung auf grapple/index.html) bleibt versioniert
+      # und wird mitveröffentlicht, damit der Pages-Einstiegspunkt funktioniert.
+      - name: Pages konfigurieren
+        uses: actions/configure-pages@v5
+
+      - name: Ganzes Repo als Site hochladen
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Ausliefern
+        id: deployment
+        uses: actions/deploy-pages@v4

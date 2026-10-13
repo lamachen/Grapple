@@ -9,8 +9,16 @@ Interaktion mit beweglichen Körpern, und echtes Pendeln ohne eine einzige Posit
 **Bewegungsvorbild:** Mirror's Edge (Bewegungsfreiheit, Impulserhalt, Parkour-Ketten)
 **Grapple-Vorbild:** Spider-Man (Schwung aufbauen, an Ketten hängen, sich durch den Raum ziehen)
 
-`index.html` öffnen — fertig. **Reines WebGL2, keine Abhängigkeiten, keine Netzwerkzugriffe.**
-Funktioniert offline und in der In-App-Vorschau.
+**Einmal bauen, dann `index.html` öffnen** — fertig:
+
+```bash
+python3 tools/build.py     # src/*.js + tools/template.html → index.html (nur Python-Stdlib)
+```
+
+`index.html` ist ein gebautes Artefakt und liegt deshalb **nicht** im Repo
+(`grapple/.gitignore`); auf GitHub Pages wird es beim Push auf `main` von
+`.github/workflows/pages.yml` gebaut. **Reines WebGL2, keine Abhängigkeiten,
+keine Netzwerkzugriffe.** Funktioniert offline und in der In-App-Vorschau.
 
 > 📐 Das eigentliche Ergebnis dieser Arbeit ist das Architektur-Dokument:
 > **[doc/ARCHITEKTUR.md](doc/ARCHITEKTUR.md)** — warum der naheliegende Ansatz
@@ -22,7 +30,8 @@ Funktioniert offline und in der In-App-Vorschau.
 
 ## Start
 
-1. `index.html` im Browser öffnen (Chrome/Edge/Firefox/Safari, WebGL2).
+1. `python3 tools/build.py` (einmal, oder nach jeder `src/`-Änderung).
+2. `index.html` im Browser öffnen (Chrome/Edge/Firefox/Safari, WebGL2).
 2. **Klicken** → Mauszeiger wird gesperrt, Audio startet.
 3. `ESC` beendet die Mauszeiger-Sperre.
 
@@ -156,7 +165,8 @@ node tools/test_wrap.js      # Wickeln um Objekte: 4 Invarianten + 4 XFAIL
 node tools/check_panel.js    # zeigt/erreicht jeder der 29 Regler seinen echten Wert?
 node tools/bench.js          # Micro-Benchmarks
 node tools/test_replay.js    # Replay-Determinismus + Fixture-Fingerabdruck
-python3 tools/build.py       # src/*.js → index.html
+node tools/test_edgecross.js # Kanten-Überstreichungs-Test des Pivot-Solvers (31 Assertions)
+python3 tools/build.py       # src/*.js → index.html (Artefakt, nicht versioniert)
 
 ### Deterministisches Replay (F9)
 
@@ -321,7 +331,7 @@ Behauptungen direkt, z. B.:
 ## Struktur
 
 ```
-index.html            fertiges Spiel (188 KB, self-contained)
+index.html            fertiges Spiel — GEBAUT, nicht versioniert (345 KB, self-contained)
 doc/ARCHITEKTUR.md    ★ Begründung, Modell, Messwerte, Grenzen, Portierung
 doc/architektur.svg   Schichten-Diagramm
 src/00_math.js        Vec3 / Quat / Mat4

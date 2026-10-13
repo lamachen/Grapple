@@ -628,6 +628,37 @@ Suite am Ende: `test_sim` 208/208, `test_wrap` 9 + 4 XFAIL, `test_replay`, `test
 `check_panel` (29 Slider + 6 Schalter), `test_edgecross` 31/31 — alle grün.
 `index.html` gebaut: 372 116 Bytes auf Platte (build.py meldet 360,8 KB).
 
+### Repo-Aufräumen (zwei Runden, auf Rückmeldung des Nutzers)
+
+Anlass: Bilddateien und Dopplungen blähen das Repo auf, wenn es als Kontext geladen wird.
+Inventur vorher: **42 Dateien, 1800,8 KB** Working Tree, `.git` 1,4 MB.
+
+| Runde | Was | Größe |
+|---|---|---|
+| `a86db17` | `uploads/` gelöscht (7 Bilder: Nutzerskizze, zwei weitere Skizzen, drei Videoframes vom 2026-10-10). Referenziert ausschließlich in Kommentaren, die denselben Inhalt in Worten trugen; die Skizze ist als Test **W9** in `test_wrap.js` maschinenlesbar vorhanden. 4 Referenzen umgeschrieben. | −618 KB |
+| `a86db17` | Messprotokoll aus `src/02_rope.js` in diese Datei verlegt: 148 Zeilen über `wrapSolver`, 148 Zeilen Befund-Block bei `_segBoxBeyond`, Prosa der `edgeCross2D`-Doku. Im Code bleiben die ~20 Zeilen, die man zum Ändern braucht (Schalterzustände, Kopfzahl jeder Messung, Formel + die beiden Fallen `|d|²` und Residual-Pflicht). `02_rope.js` 173,5 → 157,4 KB, Kommentaranteil 25 % → 22 %. | −16 KB |
+| `a86db17` | `tools/probe_worst.js` gelöscht — `probe_orbit2.js` (`jumpInfo`, `detourTrace`) und `probe_blocked.js` liefern dasselbe. | −4 KB |
+| Folge-Commit | `grapple/index.html` nicht mehr versioniert (345 KB, enthielt den gesamten `src`-Code noch einmal). Stattdessen `.github/workflows/pages.yml`: baut beim Push auf `main` mit `python3 grapple/tools/build.py` (nur Python-Stdlib) und veröffentlicht das Repo auf GitHub Pages. `grapple/.gitignore` neu, Wurzel-`.gitignore`-Hinweis korrigiert, README an drei Stellen. | −345 KB |
+
+**Nachher: 35 Dateien, 804,7 KB** — von 1800,8 KB, also **−55 %**, ohne dass eine Information
+verloren ging. Bilder bleiben in der Git-Historie (kein Rewrite, kein Force-Push auf `main`).
+
+Bewusst behalten: `doc/architektur.svg` (11,6 KB, von README und ARCHITEKTUR verlinkt, SVG ist
+Text) und `tools/fixtures/demo_orbit.json` (64,7 KB, Replay-Regression R2).
+
+⚠ **Pages-Voraussetzung:** im Repo unter *Settings → Pages* muss „Source: GitHub Actions" stehen.
+Der Workflow triggert nur auf `push` nach `main` (plus manuell), weil exakt der main-Stand
+veröffentlicht werden soll — bis zum nächsten Merge nach `main` liefert Pages den zuletzt
+dort gebauten Stand.
+
+**Keine „vielen Maps":** Das Repo hat eine Level-Datei (`src/06_level.js`, 7,4 KB) und das Spiel
+baut genau **eine** Welt (`07_game.js`: `new World()` + `buildLevel()` je einmal). Die „Zonen"
+dort sind Bereiche derselben durchgehend begehbaren Karte, und `spots` sind **Teleport-Marker**
+(Name + Position + Blickwinkel, anwählbar über die Zifferntasten 1–9 und Buttons im HUD) — keine
+umschaltbaren Umgebungen. Was wie mehrere Welten aussieht, sind die Test-Suiten: `test_sim.js`
+baut 45 Mini-Welten (je Assertion Boden + ein Hindernis), und drei Werkzeuge bauen eine eigene
+Welt (`probe_wrapclean`, `test_edgecross`, `test_replay`).
+
 ---
 
 ## 12. Aktueller Stand der Schalter (`ROPE_DEFAULTS` in `src/02_rope.js`)
