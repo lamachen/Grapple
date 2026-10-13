@@ -50,7 +50,8 @@ Abhängigkeiten, kein Netzwerk). Entsteht aus `src/*.js` + `tools/template.html`
 1. **`index.html` nie von Hand editieren.** Es ist das gebaute Artefakt aus
    `src/*.js` und liegt nicht im Repo. Nach jeder `src/`-Änderung:
    `python3 tools/build.py`.
-2. **`test_wrap.js` hat 4 XFAIL-Zeilen — die sind gewollt.** Sie arretieren den
+2. **`test_wrap.js` (4) und `test_sim.js` Sektion 20c (4) haben XFAIL-Zeilen —
+   die sind gewollt.** Sie arretieren den
    bekannten Wickel-Defekt, statt ihn schönzurechnen („9 bestanden, 0
    fehlgeschlagen, 4 bekannter Defekt"). Sie verschwinden erst, wenn der Defekt
    wirklich behoben ist; bis dahin sind sie die Messlatte. Wer sie auf „grün"
@@ -71,9 +72,9 @@ Abhängigkeiten, kein Netzwerk). Entsteht aus `src/*.js` + `tools/template.html`
 **Prozessregeln, die hier gelten.**
 
 * Alle Werkzeuge laufen headless — kein Browser, keine GPU, keine Secrets.
-* Vor jedem Commit alle sechs: `test_sim` (208), `test_wrap` (9 + 4 XFAIL),
-  `test_replay`, `test_browser`, `check_panel`, `test_edgecross` (31).
-  Danach `python3 tools/build.py`.
+* Vor jedem Commit alle sechs: `test_sim` (213 + 4 XFAIL), `test_wrap`
+  (9 + 4 XFAIL), `test_replay`, `test_browser`, `check_panel`,
+  `test_edgecross` (31). Danach `python3 tools/build.py`.
 * **Sofort committen UND pushen.** `.git` ist in diesem Projekt schon zweimal
   beim Session-Handoff verschwunden, während der Arbeitsbaum liegen blieb;
   beide Male war nur gepushter Stand gerettet.
@@ -88,6 +89,8 @@ deterministisch abspielen), `make_fixture.js`, `bench.js`, und vier Sonden, die
 messen statt abzunehmen — `probe_wrapclean.js` (**reine Testwelt, das
 Abnahme-Kriterium für den Solver**), `probe_orbit2.js` (Level-Orbit mit
 Wickel-Zwang), `probe_blocked.js` (warum bleibt ein Schritt blockiert),
+`probe_windoracle.js` (**Topologie-Erhaltung**: Umlaufwinkel gegen den von der
+Handbahn erzwungenen Winkel — das Maß, um das es beim Wickeln geht),
 `probe_feel.js`, `probe_orbit.js`. Alle mit `MODE=legacy|pivot`.
 
 ---

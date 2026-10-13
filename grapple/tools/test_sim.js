@@ -32,11 +32,17 @@ const { v3, vset, vcopy, vclone, vlen, vlenSq, vdist, vsubNew, vaddNew, vsclNew,
 const closestOnSeg = E.closestOnSegment;
 
 /* ------------------------------- Test-Hilfen ------------------------------ */
-let passed = 0, failed = 0;
+let passed = 0, failed = 0, xfail = 0;
 const results = [];
 function ok(cond, name, detail) {
   if (cond) { passed++; results.push(['PASS', name, detail || '']); }
   else { failed++; results.push(['FAIL', name, detail || '']); }
+}
+/* xok = erwarteter Fehlschlag (Konvention aus test_wrap.js): arretiert einen
+   bekannten Defekt, statt ihn schönzurechnen. Zielwert steht im Detail.      */
+function xok(cond, name, detail) {
+  if (cond) { passed++; results.push(['PASS', name, detail || '']); }
+  else { xfail++; results.push(['XFAIL', name, detail || '']); }
 }
 function near(a, b, eps) { return Math.abs(a - b) <= eps; }
 function finite3(v) { return isFinite(v[0]) && isFinite(v[1]) && isFinite(v[2]); }
@@ -2124,11 +2130,147 @@ console.log('\n═══ 19. Körper-Kollisionen: Kiste↔Kiste und Spieler↔Ki
   }
 }
 
-for (const [st, name, detail] of results) {
-  console.log(` ${st==='PASS'?'✔':'✘'} ${name}${detail ? '   ·  ' + detail : ''}`);
+/* ========================================================================== */
+console.log('\n═══ 20. Struktur-Integrität und beide Solver-Modi ═══');
+/* Anlass: In a86db17 ist die METHODE `_pivotCleanup` beim Kürzen eines
+   Kommentarblocks versehentlich mit herausgeschnitten worden, während ihr
+   Aufruf in `solve()` stehen blieb. `node --check` meldet das nicht
+   (Property-Zugriff), und KEINE der sechs Suiten läuft je mit
+   `wrapSolver: 'pivot'` — alle testen die Voreinstellung `legacy`, das Panel
+   führt den Schalter nicht. Der Modus war damit über fünf Commits hinweg
+   auf `main` hart defekt (TypeError beim ersten Aufräum-Tick), ohne dass
+   etwas rot wurde. 20a und 20b schließen diese Lücke klasse-weit.        */
+{
+  const files = ['00_math.js', '01_world.js', '02_rope.js', '03_player.js',
+                 '04_render.js', '05_fx.js', '06_level.js', '07_game.js'];
+  const defined = new Set();
+  const called = new Map();          // Methode -> Dateien, die sie aufrufen
+  for (const f of files) {
+    const src = fs.readFileSync(path.join(SRC, f), 'utf8');
+    for (const m of src.matchAll(/^  ([A-Za-z_$][\w$]*)\s*\(/gm)) defined.add(m[1]);
+    for (const m of src.matchAll(/\bthis\.([A-Za-z_$][\w$]*)\s*\(/g)) {
+      if (!called.has(m[1])) called.set(m[1], new Set());
+      called.get(m[1]).add(f);
+    }
+  }
+  const missing = [...called.entries()].filter(([n]) => !defined.has(n));
+  ok(missing.length === 0, '20a: jede this.METHODE() hat eine Definition',
+     missing.length ? missing.map(([n, w]) => n + ' (in ' + [...w].join(', ') + ')').join('; ')
+                    : `${called.size} aufgerufene Methoden, ${defined.size} Definitionen`);
+}
+{
+  /* 20b: beide Solver-Modi müssen überhaupt laufen. Reine Testwelt (Boden +
+     ein Quader), Hand auf Kreisbahn — dieselbe Geometrie wie
+     tools/probe_wrapclean.js, damit die Zahl hier und dort vergleichbar ist. */
+  const run = (mode) => {
+    const w = new E.World(); w.gravity = -26;
+    w.addBox([-40, -2, -40], [40, 0, 40], { color: [1, 1, 1] });
+    const col = w.addBox([-1.6, 0, -1.6], [1.6, 10, 1.6], { color: [.4, .8, .4] });
+    const P = Object.assign({}, E.ROPE_DEFAULTS, { wrapSolver: mode });
+    const S = new E.RopePathSolver(w, P);
+    S._hostSettled = true;
+    const ANCHOR = [-9, 2.5, 0], HY = 2.5, V = 5, R = 4, hz = 120, dt = 1 / hz;
+    const hand = t => { const a = -t * V / R; return [R * Math.sin(a), HY, R * Math.cos(a)]; };
+    let err = null, nan = 0;
+    try {
+      S.solve(hand(0), ANCHOR, dt, null, null);
+      S.converge();
+      for (let i = 1; i <= 1200; i++) {
+        S.solve(hand(i * dt), ANCHOR, dt, null, null);
+        if (!isFinite(S.length)) nan++;
+      }
+    } catch (e) { err = String(e && e.message || e); }
+    return { err, nan, len: S.length, stats: S.stats };
+  };
+  for (const mode of ['legacy', 'pivot']) {
+    const r = run(mode);
+    ok(r.err === null, `20b: Solver-Modus '${mode}' läuft 10 s ohne Ausnahme`, r.err || 'keine Ausnahme');
+    ok(r.nan === 0 && isFinite(r.len), `20b: '${mode}' liefert endliche Pfadlänge`,
+       r.nan ? `${r.nan} × nicht endlich` : `Länge ${r.len.toFixed(2)} m`);
+  }
+}
+{
+  /* 20c: TOPOLOGIE-ERHALT über eine volle Runde — die Invariante, um die es
+     beim Wickeln geht, und die bisher von keinem Test geprüft wurde.
+
+     Befund (tools/probe_windoracle.js, von einem externen Modell erhoben und
+     hier gegen main bestätigt, legacy wie pivot auf die Nachkommastelle
+     gleich): Der Umlaufwinkel des Solvers folgt der Handbahn exakt —
+     0,32 → −0,93 → −2,18 → −3,43 → −4,68 → −5,93 rad, also eine echte
+     Windung, und die Pfadlänge wächst korrekt auf 19,75 m. Dann, bei
+     t = 6,07 s, fällt er schlagartig um 2π auf −0,90:
+       · legacy: Sackgassen-Neuaufbau (`rebuilds` 0→1), wirft alle 3 Kontakte
+         weg, `lengthGeo` 19,87 → 5,26 m. Sichtbar wird das NICHT, weil
+         `_lenOff` 14,58 m aufnimmt und über `resyncFade` (4 m/s) abbaut —
+         die Constraint zieht ~3,6 s lang mit 14,58 m Geisterseil.
+       · pivot: dieselbe Windung geht über die Selbst-Durchdringungs-Regel
+         verloren (3 Verwürfe in einem Tick), aber OHNE Offset — deshalb der
+         gemessene Längensprung von 6,689 m.
+     Das ist derselbe Vorgang wie der gemeldete Skizzen-Fall: Topologiewechsel
+     unter Last.
+
+     Ursache ist NICHT `wrapMaxCount` (6 → 24 ändert nichts) und NICHT
+     `wrapWindMax` (7,5 → 99 ändert nichts), sondern die hartkodierte
+     `sameBox >= 3`-Kappe in `_tryInsertWrap`: eine volle Runde um einen
+     Quader braucht 4 Kantenkontakte. Hochsetzen auf 12 hebt maxKontakte von
+     3 auf 4, der 2π-Verlust bleibt aber (7 Rebuilds, Sprung unverändert
+     6,27 rad) — die Kappe ist also notwendig, aber nicht hinreichend.     */
+  const windRun = (mode) => {
+    const w = new E.World(); w.gravity = -26;
+    w.addBox([-40, -2, -40], [40, 0, 40], { color: [1, 1, 1] });
+    const col = w.addBox([-1.6, 0, -1.6], [1.6, 10, 1.6], { color: [.4, .8, .4] });
+    const P = Object.assign({}, E.ROPE_DEFAULTS, { wrapSolver: mode });
+    const S = new E.RopePathSolver(w, P);
+    S._hostSettled = true;
+    const ANCHOR = [-9, 2.5, 0], V = 5, R = 4, hz = 120, dt = 1 / hz;
+    const hand = t => { const a = -t * V / R; return [R * Math.sin(a), 2.5, R * Math.cos(a)]; };
+    S.solve(hand(0), ANCHOR, dt, null, null);
+    S.converge();
+    let prevW = S._pathWindingXZ(S.pts, col), prevGeo = S.lengthGeo;
+    let maxDW = 0, maxDWat = 0, maxJump = 0, maxJumpAt = 0, maxWraps = 0;
+    const T = 8;                                    // 1,6 Runden
+    for (let i = 1; i <= Math.round(T * hz); i++) {
+      const t = i * dt, A = hand(t);
+      S.solve(A, ANCHOR, dt, null, null);
+      const W = S._pathWindingXZ(S.pts, col);
+      if (Math.abs(W - prevW) > maxDW) { maxDW = Math.abs(W - prevW); maxDWat = t; }
+      /* Handweg pro Substep: mehr darf die Pfadlänge nicht springen — ein Seil
+         kann nicht schneller kürzer werden, als die Hand sich bewegt.       */
+      const dj = Math.abs(S.lengthGeo - prevGeo);
+      if (dj > maxJump) { maxJump = dj; maxJumpAt = t; }
+      maxWraps = Math.max(maxWraps, S.wraps.length);
+      prevW = W; prevGeo = S.lengthGeo;
+    }
+    const handStep = V / hz;
+    return { maxDW, maxDWat, maxJump, maxJumpAt, maxWraps, handStep, stats: S.stats };
+  };
+  const wl = windRun('legacy'), wp = windRun('pivot');
+  /* legacy ist hier NICHT grün, und das ist der Befund: Der ausgelieferte Modus
+     verliert dieselbe Windung zur selben Zeit (t = 6,07 s). Sichtbar wird es
+     nur deshalb nicht, weil `_lenOff` die 14,58 m aufnimmt und über
+     `resyncFade` abbaut — `S.length` springt bloß 0,053 m, `S.lengthGeo`
+     dagegen 14,610 m. Die Constraint zieht in dieser Zeit mit 14,58 m
+     Geisterseil (~3,6 s), und die Wicklung ist weg. Deshalb XFAIL mit Zielwert
+     statt grün gerechnet.                                                  */
+  xok(wl.maxDW < 0.5, '20c [XFAIL] legacy erhält die Wicklung über 1,6 Runden',
+     `größter Winkelsprung ${wl.maxDW.toFixed(2)} rad bei t=${wl.maxDWat.toFixed(2)} s — Ziel < 0,5 rad; ` +
+     `max. ${wl.maxWraps} Kontakte, ${wl.stats.rebuilds || 0} Sackgassen-Neuaufbauten`);
+  xok(wl.maxJump < wl.handStep * 2, '20c [XFAIL] legacy Pfadlänge springt nicht weiter als die Hand läuft',
+     `max. Sprung ${wl.maxJump.toFixed(3)} m (lengthGeo) bei t=${wl.maxJumpAt.toFixed(2)} s — Ziel < ${(wl.handStep * 2).toFixed(3)} m`);
+  xok(wp.maxDW < 0.5, '20c [XFAIL] pivot erhält die Wicklung über 1,6 Runden',
+     `größter Winkelsprung ${wp.maxDW.toFixed(2)} rad bei t=${wp.maxDWat.toFixed(2)} s — Ziel < 0,5 rad; ` +
+     `${wp.stats.pivotSelfPen || 0} Kontakt-Verwürfe durch die Selbst-Durchdringungs-Regel`);
+  xok(wp.maxJump < wp.handStep * 2, '20c [XFAIL] pivot Pfadlänge springt nicht weiter als die Hand läuft',
+     `max. Sprung ${wp.maxJump.toFixed(3)} m bei t=${wp.maxJumpAt.toFixed(2)} s — Ziel < ${(wp.handStep * 2).toFixed(3)} m`);
 }
 
+for (const [st, name, detail] of results) {
+  const z = st === 'PASS' ? '✔' : (st === 'XFAIL' ? '⚠' : '✘');
+  console.log(` ${z} ${name}${detail ? '   ·  ' + detail : ''}`);
+}
+if (xfail) console.log(`\n⚠ ${xfail} XFAIL-Zeile(n) sind ein dokumentierter, noch nicht behobener Defekt.`);
 
 
-console.log(`\n ${passed} bestanden, ${failed} fehlgeschlagen`);
+
+console.log(`\n ${passed} bestanden, ${failed} fehlgeschlagen, ${xfail} bekannter Defekt (XFAIL)`);
 process.exit(failed ? 1 : 0);

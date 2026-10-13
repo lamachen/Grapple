@@ -103,8 +103,9 @@ S.converge();
 const N = Math.round(T * hz);
 let valid = 0, invalid = 0, blocked = 0, maxDepth = 0, depthAt = -1;
 let maxJump = 0, jumpAt = -1, prevLen = S.length;
+let maxJumpGeo = 0, jumpGeoAt = -1, prevGeo = S.lengthGeo;
 let releases = 0, relWithJump = 0, prevWraps = S.wraps.length;
-let maxWraps = 0, contactSteps = 0, noContactBlocked = 0;
+let maxWraps = 0, contactSteps = 0, noContactBlocked = 0, maxLenOff = 0;
 let detourMax = 0, detourAt = -1;
 let edgeChanges = 0, prevEdges = S.wraps.map(w => w.box.__id + ':' + w.edgeIdx).join(',');
 const worst = [];
@@ -126,9 +127,19 @@ for (let i = 1; i <= N; i++) {
 
   if (!validHand(A)) { invalid++; prevLen = S.length; continue; }
   valid++;
+  maxLenOff = Math.max(maxLenOff, S._lenOff || 0);
   const jump = Math.abs(S.length - prevLen);
   if (jump > maxJump) { maxJump = jump; jumpAt = t; }
   prevLen = S.length;
+  /* ZUSÄTZLICH der ungefilterte Sprung: `S.length` trägt den Offset `_lenOff`,
+     der einen Topologiewechsel über `resyncFade` verschmiert. Er ist damit
+     KEIN Maß für Stetigkeit — gemessen sprang `length` nur 0,053 m, während
+     `lengthGeo` im selben Substep 14,610 m verlor (die Wicklung war weg, der
+     Offset hat es verdeckt). Wer Stetigkeit messen will, muss lengthGeo
+     messen; beide Werte stehen jetzt in der Ausgabe.                      */
+  const jumpGeo = Math.abs(S.lengthGeo - prevGeo);
+  if (jumpGeo > maxJumpGeo) { maxJumpGeo = jumpGeo; jumpGeoAt = t; }
+  prevGeo = S.lengthGeo;
 
   ref.wraps.length = 0;
   ref.solve(A, ANCHOR, dt, null, null);
@@ -166,6 +177,8 @@ console.log(JSON.stringify({
   blocked, blockedPct: +(blocked / Math.max(1, valid) * 100).toFixed(2),
   maxDepth: +maxDepth.toFixed(2), depthAt: +depthAt.toFixed(2),
   maxJump: +maxJump.toFixed(3), jumpAt: +jumpAt.toFixed(2),
+  maxJumpGeo: +maxJumpGeo.toFixed(3), jumpGeoAt: +jumpGeoAt.toFixed(2),
+  maxLenOff: +maxLenOff.toFixed(2),
   detourMax: +detourMax.toFixed(2), detourAt: +detourAt.toFixed(2),
   releases, relWithJump, maxWraps, contactSteps, noContactBlocked, edgeChanges,
   pivotInserts: S.stats.pivotInserts || 0,

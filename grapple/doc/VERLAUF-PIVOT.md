@@ -100,7 +100,8 @@ python3 tools/build.py        # index.html neu bauen; Größe in den Commit
 
 | Werkzeug | Frage, die es beantwortet |
 |---|---|
-| `tools/probe_wrapclean.js` | **Das Abnahme-Kriterium.** Reine Testwelt (Boden + EIN Quader), jeder Schritt gültig. `V R T` als Argumente. |
+| `tools/probe_wrapclean.js` | **Das Abnahme-Kriterium.** Reine Testwelt (Boden + EIN Quader), jeder Schritt gültig. `V R T` als Argumente. Meldet `maxJump` (maskiert), `maxJumpGeo` (ungefiltert) und `maxLenOff` getrennt — siehe Abschnitt 10b.3. |
+| `tools/probe_windoracle.js` | **Topologie-Erhaltung.** Umlaufwinkel des Solvers gegen den von der Handbahn erzwungenen Winkel, plus Ereignisprotokoll (Rebuild/Resync/Release/SelfPen mit `lengthGeo` und `_lenOff`). `V R T` als Argumente, `MAXCOUNT`/`WINDMAX` als Umgebungsvariablen. |
 | `tools/probe_orbit2.js` | Orbit um die Levelsäule mit **echtem Wickel-Zwang** (Anker frei stehend süd-westlich). Liefert `corner` (Eckübergang-Instrumentierung), `sweep` (Sweep-Zähler), `jumpInfo` (Kontext des größten Längensprungs), `detourTrace` (Umweg-Verlauf). ⚠ Messgeometrie: die Handbahn läuft durch die Levelgeometrie, siehe Abschnitt 9.1. |
 | ~~`tools/probe_worst.js`~~ | **wieder entfernt** (Aufräumen): `probe_orbit2.js` liefert denselben Befund über `jumpInfo` (Kontext des größten Längensprungs) und `detourTrace` (Umweg-Verlauf), und `probe_blocked.js` liefert Geometrie + Kontakte + `_segBlocked`-Antwort für blockierte Schritte. Der Befund aus Abschnitt 9.1 bleibt gültig und ist hier festgehalten. |
 | `tools/probe_blocked.js` | Erster blockierter Schritt + **Insert-Probe**: fragt `_tryInsertWrap` direkt, ob es eine Lösung gäbe. |
@@ -628,6 +629,113 @@ frei stehend süd-westlich, also mit echtem Wickel-Zwang. Radius 4,5 m, 5 m/s �
 
 ---
 
+## 10b. Externe Nachprüfung — zwei meiner eigenen Schlüsse waren falsch
+
+Ein zweites Modell hat denselben Stand (`main` = `50bb257`) unabhängig vermessen. Ich habe seine
+Befunde gegen `main` nachgebaut (`tools/probe_windoracle.js`) statt sie zu übernehmen. Ergebnis:
+**die Zahlen stimmen auf die Nachkommastelle**, und zwei Deutungen von mir waren falsch.
+
+### 10b.1 Das Oracle: Umlaufwinkel gegen den topologisch erzwungenen Winkel
+
+Hand auf Kreisbahn (θ_H = −t·V/R), Anker fest ⇒ die Route muss den Winkelunterschied als echte
+Windung mitzählen. Gemessen (legacy, `main`), 16 s:
+
+| t [s] | Runden | `Wsol` [rad] | `lengthGeo` [m] | `_lenOff` [m] | Kontakte |
+|---|---|---|---|---|---|
+| 1 | 0,20 | 0,32 | 5,35 | 0,00 | 0 |
+| 3 | 0,60 | −2,18 | 11,75 | 0,00 | 0 |
+| 5 | 0,99 | −4,68 | 17,07 | 0,00 | 3 |
+| 6 | 1,19 | −5,93 | 19,75 | 0,00 | 3 |
+| **7** | **1,39** | **−0,90** | **7,21** | **10,84** | **0** |
+| 11 | 2,19 | −5,90 | 19,70 | 0,00 | 3 |
+| **12** | **2,39** | **−0,86** | **7,08** | **10,87** | **0** |
+
+Der Winkel folgt der Handbahn exakt — und fällt bei t = 6,07 s **schlagartig um 6,27 rad ≈ 2π**,
+zweimal im Lauf, jeweils mit `rebuilds 0→1`, `wraps 3→0`, `lengthGeo 19,87 → 5,26 m`.
+Größter Winkelsprung pro Substep: **6,27 rad bei t = 6,07** (legacy) bzw. **t = 11,05** (pivot).
+
+### 10b.2 Korrektur 1 — die „V-Schlaufe" ist keine Fehlstelle
+
+Ich hatte `maxUmweg 14,4 m` als Defekt gedeutet („das Seil behält eine Wicklung, die geometrisch
+nicht mehr nötig ist") und `_pivotCleanup` gebaut, um sie aufzuräumen. **Falsch.** Bei t = 6 s ist
+die Hand 1,19 Runden gelaufen; das Seil IST um die Säule gewickelt, und 19,75 m sind die korrekte
+Länge für ~1,2 Windungen. Der „Umweg" ist eine Differenz gegen eine **gedächtnislose Referenz**,
+die per Konstruktion keine Windung kennen kann — die Messgröße misst also die Windung und nennt
+sie Müll. `_pivotCleanup` war damit ein Mechanismus, der korrekte Topologie gegen falsche
+Referenz hätte „reparieren" sollen; dass er 0 von 76 Aufrufen tauschte, ist kein Versagen,
+sondern Glück.
+
+Der echte Defekt ist der **2π-Verlust** in derselben Zeile der Tabelle — und der ist in beiden
+Modi derselbe Vorgang: Topologiewechsel unter Last, also exakt Meldung **M2**
+(`doc/MELDUNGEN.md`).
+
+### 10b.3 Korrektur 2 — „legacy ist bei der Längenstetigkeit 126× besser" war ein Messartefakt
+
+`probe_wrapclean.js` maß `S.length`. Das ist `lengthGeo + _lenOff` — also der **maskierte** Wert.
+Nachgemessen mit `lengthGeo`:
+
+| | blockiert | Sprung `length` | **Sprung `lengthGeo`** | max `_lenOff` |
+|---|---|---|---|---|
+| legacy | 25 (1,30 %) | 0,053 m | **14,610 m** | **14,58 m** |
+| pivot | 17 (0,89 %) | 6,689 m | **6,689 m** | 0,00 m |
+
+legacy verliert also **14,61 m Geometrie in einem Substep** und versteckt das im Offset: die
+Constraint zieht danach ~3,6 s lang (`resyncFade` = 4 m/s) mit 14,58 m Geisterseil, das es
+geometrisch nicht gibt. pivot verliert 6,69 m und versteckt nichts. Die Reihenfolge ist damit
+umgekehrt zu dem, was ich berichtet hatte: **pivot ist der ehrlichere, legacy der kaschierte
+Sprung** — und beide sind weit jenseits dessen, was physikalisch zulässig wäre
+(Handweg pro Substep: 0,042 m).
+
+`probe_wrapclean.js` meldet seitdem `maxJump` (maskiert), `maxJumpGeo` (ungefiltert) und
+`maxLenOff` getrennt. Alle älteren `maxSprung`-Zahlen in dieser Datei sind maskierte Werte und
+damit als Stetigkeitsmaß **ungeeignet**; die Blockaden- und Umweg-Zahlen bleiben gültig.
+
+### 10b.4 Die Kappen: welche bindet wirklich?
+
+Drei Obergrenzen standen im Verdacht, eine Windung strukturell zu verhindern:
+
+| Kappe | Wert | Erhöht auf | Effekt |
+|---|---|---|---|
+| `wrapMaxCount` | 6 | 24 | **keiner** — 7 Rebuilds, `maxKontakte` 3, Sprung 6,27 rad |
+| `wrapWindMax` | 7,5 rad | 99 | **keiner** — identisch |
+| `sameBox >= 3` (hartkodiert in `_tryInsertWrap`, Zeile ~1889, **kein Parameter**) | 3 | 12 | `maxKontakte` 3 → **4**, aber 7 Rebuilds und Sprung 6,27 rad bleiben |
+
+Eine volle Runde um einen Quader braucht 4 Kantenkontakte — `sameBox >= 3` schließt sie also
+strukturell aus. Das Hochsetzen ist **notwendig, aber nicht hinreichend**: Der 2π-Verlust bleibt.
+Das deckt sich mit dem, was das externe Modell selbst berichtet hatte („hält zwar länger, springt
+aber trotzdem um 2π. Die Obergrenze ist also nicht die einzige Ursache.").
+
+### 10b.5 Was aus dem externen Prototyp zu lernen ist (nicht übernommen, nicht verifiziert)
+
+Dort lief ein rein ereignisbasierter Prototyp außerhalb des Repos, der laut dessen Protokoll
+10 Runden vor/zurück mit `maxWindingDiff = 0`, `blocked = 0`, `maxLenExcessOverHandStep = 0`
+hielt, plus einen Fuzz über 60 Zufallswelten/216 000 Schritte mit 2,5 % blockierten Schritten.
+Vier Mechanismen unterscheiden ihn von diesem Repo — drei davon decken sich mit Befunden, die
+hier unabhängig erhoben wurden:
+
+1. **Dieselbe Kante darf mehrfach vorkommen** (Windungen). Hier durch `sameBox >= 3` und die in
+   `5d9d57a` eingebaute Doppelkanten-Schranke ausgeschlossen. ⚠ Meine Doppelkanten-Schranke ist
+   damit **nicht** eindeutig richtig: Sie hat einen echten Defekt behoben (dieselbe Kante zweimal
+   auf *demselben Punkt*, 17,64 m bei 15,69 m Soll), blockiert aber möglicherweise echte Windungen.
+   Unterscheiden ließe sich das über die Windungs-Zahl pro Box statt über die Kanten-Identität.
+2. **Skip-Liste:** eine gerade freigegebene Kante darf im selben Schritt nicht sofort wieder
+   eingefügt werden. Ohne sie: 495 Einfügungen/Freigaben statt 15.
+3. **Kontakte auf Eckpunkten als eigener Feature-Typ** mit Übergängen Kante→Ecke→Kante, gesteuert
+   über `tRaw`/`elen` — nicht über „welches Kantenende ist näher". Genau das war der Grund, warum
+   `_pivotEdgeHop` hier 0 Treffer hatte (Abschnitt 8.2): Er suchte die nächste *Kante* von einem
+   Punkt in Kantenmitte, wo es keine gibt. Der Prototyp fragt stattdessen, ob der Berührpunkt über
+   das Kantenende **hinauswandert**, und wandelt dann in einen Eckpunkt-Kontakt um.
+4. **Clearance 0** in der Topologie (Seildicke gehört in die Darstellung). Hier: 0,14 m überall,
+   inklusive Berührpunkt.
+
+⚠ **Nicht übernommen, weil nicht überprüfbar:** Die Prototyp-Zahlen stammen aus dessen
+Sitzungsprotokoll, der Code lag in einem Scratchpad außerhalb des Repos. Die Säulen-Ergebnisse
+sind außerdem mit Vorsicht zu lesen: Dort war `toV: 0, toE: 0` — die Feature-Übergänge wurden in
+der Säulenwelt also **nie ausgeübt**; die Fälle, in denen der Fuzz scheiterte (Kantenenden, Ecken),
+sind genau die, die dort nicht vorkamen.
+
+---
+
 ## 11. Commits dieser Session
 
 | Commit | Inhalt |
@@ -703,7 +811,13 @@ Umräumen: 157,4 KB, Kommentarzeilen 25 % → 22 %.
 
 ---
 
-## 13. Offene Entscheidung, die der Nutzer treffen muss
+## 13. ~~Offene Entscheidung~~ — gegenstandslos, siehe 10b.2
+
+**Dieser Abschnitt ist überholt.** Die V-Schlaufe war keine Fehlstelle, sondern die korrekte
+Windung nach einer vollen Runde; die Frage „darf das Seil sich gerade ziehen?" stellte sich damit
+nicht. Der echte Defekt ist der 2π-Verlust pro Runde (Abschnitt 10b.1), und der ist **keine**
+Produktentscheidung, sondern ein Bug: Das Seil verliert eine Windung, die es hat, und die
+Constraint zieht danach Sekunden mit Geisterseil. Ursprünglicher Text zur Nachvollziehbarkeit:
 
 **Die V-Schlaufe.** Hand und Anker auf derselben Seite, direkte Linie frei, das Seil hat 14,20 m
 Umweg um die falsche Seite. Vier Möglichkeiten, die dem Nutzer vorgelegt wurden (Antwort stand am
@@ -718,7 +832,26 @@ Ende dieser Session noch aus):
 
 ---
 
-## 14. Nächste Schritte, priorisiert
+## 13b. Neue Prioritäten nach 10b
+
+1. **Den 2π-Verlust beheben** — das ist Meldung M2 und betrifft **beide** Modi, also das
+   ausgelieferte Spiel. Arretiert als `test_sim.js` 20c (4 XFAIL). Ansatzpunkt: eine volle Runde
+   um einen Quader braucht 4 Kantenkontakte, `sameBox >= 3` erlaubt 3. Hochsetzen allein reicht
+   nicht (10b.4) — nötig ist, dass der Neuaufbau die Windung **erhält** statt sie zu verwerfen,
+   oder dass er gar nicht erst auslöst.
+2. **`_lenOff` als Kaschierung prüfen.** 14,58 m Geisterseil über ~3,6 s sind ein eigener Befund,
+   unabhängig von der Ursache des Sprungs. Die Constraint zieht mit einer Länge, die die Geometrie
+   nicht hergibt.
+3. **Doppelkanten-Schranke aus `5d9d57a` überprüfen.** Sie blockiert möglicherweise echte
+   Windungen (10b.5, Punkt 1). Kriterium müsste Windungszahl pro Box sein, nicht Kanten-Identität.
+4. Eckpunkt-Kontakte als eigener Feature-Typ mit Übergängen über `tRaw`/`elen` (10b.5, Punkt 3) —
+   das ist der Mechanismus, an dem `_pivotEdgeHop` gescheitert ist.
+5. Längenstetigkeit von pivot: nur noch 6,689 m gegen legacy 14,610 m — **und** legacy kaschiert
+   seinen Sprung, pivot nicht. Der alte Punkt 1 („pivot auf 0,053 m bringen") war auf einem
+   Messartefakt gebaut und ist gestrichen.
+6. Unverändert: Biegesteifigkeit der Kette plus Nahfeld-Pass (rein visuell).
+
+## 14. ~~Nächste Schritte, priorisiert~~ (überholt durch 13b)
 
 1. **Längenstetigkeit von pivot** (größter messbarer Rückstand). Wenn die Selbst-Durchdringungs-
    Regel einen Kontakt verwirft, muss seine Auslenkung in `_lenOff` (Fade mit `resyncFade`) gehen
@@ -750,7 +883,7 @@ Ende dieser Session noch aus):
 | Selbst-Durchdringungs-Regel ganz aus | 22,0 % blockiert (die falsche Wicklung bleibt dann ewig stehen) |
 | Selbst-Durchdringung als harter Schnitttest (`_segThroughBox`) | frisst die Wicklung: 7 von 22 Sweep-Treffern abgelehnt, 132 Blockaden ohne Kontakt |
 | Tiefenstaffelung der Selbst-Durchdringung (0,1 … 1,0 × ½ Diagonale) | keine Änderung — die Durchdringungen sind tief, nicht flach |
-| `_pivotEdgeHop` (Kantenwechsel an der Ecke), zwei Fassungen | 0 Treffer; an einer senkrechten Kante in halber Höhe gibt es keine „nächste" Ecke |
+| `_pivotEdgeHop` (Kantenwechsel an der Ecke), zwei Fassungen | 0 Treffer; an einer senkrechten Kante in halber Höhe gibt es keine „nächste" Ecke. **Nachtrag 10b.5:** der externe Prototyp löst genau das anders — Eckpunkt als eigener Kontakt, Übergang gesteuert über `tRaw`/`elen` statt über „welches Ende ist näher". Der Weg war also nicht falsch, nur unvollständig |
 | Eck-Bisectrix in `edgeTouchPoint` | wirkungslos; `boxEdge` liefert `outN` längst als Bisectrix |
 | `_freshRoute` in einer Schleife frei lösen | Referenz repariert, Ergebnis unverändert, 125 → 4805 Verwürfe, 14 s → 26 s |
 | `_pivotCleanup` mit Schranke „Live-Winkel ≈ 0" | hält 50 von 52 Aufrufen; das Zickzack windet selbst ±π/2 |
@@ -758,6 +891,8 @@ Ende dieser Session noch aus):
 | `edgeCross2D` über bilineares Flächen-Schnittverfahren (Patch in `s,t` + Newton) | bricht ab: Jacobi-Determinante ~1e−13 im Wickel-Fall |
 | Newton-Politur auf `(s,t)` als Ersatz für gute Startwerte | konvergiert nicht zuverlässig; die exakte Bestimmung über `t = ((q−a(s))·d)/|d|²` ist billiger und stabiler |
 | Orbit-Messung **ohne** Maske „gültige Hand" | misst den Testaufbau: 19 % „blockiert" bei legacy sind die Hand in der Säule |
+| `maxJump` aus `S.length` als Stetigkeitsmaß | **Messartefakt** — `length` ist `lengthGeo + _lenOff` und damit maskiert. legacy: 0,053 m statt 14,610 m. Seit 10b.3 wird `lengthGeo` gemessen |
+| „V-Schlaufe" als Defekt gedeutet und `_pivotCleanup` dagegen gebaut | War die korrekte Windung nach einer vollen Runde; die Referenz kennt per Konstruktion keine Windung. Siehe 10b.2 |
 | Orbit mit Anker **auf** der Säule (`test_wrap.js`-Spot) | die Sehne kann die Säule nie schneiden — es gibt dort nichts zu wickeln |
 | Orbit mit Anker **auf der Handbahn** | 6,6-m-Sprünge aus reiner Messgeometrie (Hand läuft fast durch den Anker) |
 

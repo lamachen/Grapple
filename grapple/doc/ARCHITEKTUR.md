@@ -720,7 +720,7 @@ für Levels mit >5000 Boxen: Uniform-Grid oder BVH für `raycast`/`segmentClear`
 Alles headless (kein Browser, keine GPU nötig):
 
 ```
-node tools/test_sim.js        # 208 physikalische Assertions
+node tools/test_sim.js        # 213 physikalische Assertions + 4 XFAIL (Sektion 20c)
 node tools/test_wrap.js       # 9 Assertions + 4 XFAIL (arretierter Wickel-Defekt)
 node tools/test_replay.js     # deterministisches Replay: R1 Determinismus, R2 Fingerabdruck, R3 Penetration
 node tools/test_browser.js    # Renderer/Loop/HUD gegen DOM-+WebGL2-Stub
@@ -734,7 +734,8 @@ Mess-Sonden (keine Abnahme, aber die Grundlage jeder Solver-Entscheidung):
 `tools/probe_wrapclean.js` (reine Testwelt — **das** Abnahme-Kriterium für den Pivot-Solver),
 `tools/probe_orbit2.js` (Level-Orbit mit Wickel-Zwang), `tools/probe_worst.js` (schlimmster
 blockierter Schritt), `tools/probe_blocked.js` (warum bleibt ein Schritt blockiert),
-`tools/probe_orbit.js`, `tools/probe_feel.js`.
+`tools/probe_windoracle.js` (Topologie-Erhaltung: Umlaufwinkel gegen den von der Handbahn
+erzwungenen Winkel), `tools/probe_orbit.js`, `tools/probe_feel.js`.
 
 > 🧭 **Entwicklungsverlauf des Pivot-Solvers:** [doc/VERLAUF-PIVOT.md](VERLAUF-PIVOT.md) —
 > Ausgangslage, Glossar, jede Messung mit Zahlen, die verworfenen Wege und die offene
