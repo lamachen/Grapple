@@ -332,7 +332,9 @@ xok(runs.every(r => r.releasesWithJump === 0), 'W8 [XFAIL] Freisetzen einer Wick
     `${runs.reduce((s, r) => s + r.releasesWithJump, 0)} von ${runs.reduce((s, r) => s + r.releases, 0)} Freisetzungen springen > 0,5 m`);
 
 /* --------------------------------------------------------------------------
-   W9 — SKIZZEN-FALL (uploads/image.png, Nutzervideo Frames 5s/8s/9s):
+   W9 — SKIZZEN-FALL (Nutzerskizze + Videoframes 5s/8s/9s vom 2026-10-10;
+   die Bilddateien lagen eine Zeitlang unter uploads/ im Repo und sind dort
+   rausgenommen worden — dieser Test IST die maschinenlesbare Form davon):
    Seil mit wenigen Umlenkungen um ein DÜNNES Objekt gewickelt, Spieler
    wechselt auf die andere Seite, Sicht auf den Anker wird frei. Das Seil
    darf sich dadurch NICHT auflösen: es liegt topologisch um die Objektseite

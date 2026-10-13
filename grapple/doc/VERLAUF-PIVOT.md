@@ -15,9 +15,16 @@ Schalter und ist **nicht** gemergt.
 ## 0. Ausgangslage — was diese Session war
 
 Die Session begann damit, dass der Nutzer den **vollständigen Chatverlauf einer vorherigen Session
-als Textdatei** übergab (ca. 256 KB, `uploads/Pasted_Text_1791880068979.txt` in deren
-Arbeitsbereich) und fragte, ob die Arbeit fortgesetzt werden kann, „auch wenn das Repo nicht ganz
+als Textdatei** übergab (ca. 256 KB, im Arbeitsbereich jener Session unter `uploads/`)
+und fragte, ob die Arbeit fortgesetzt werden kann, „auch wenn das Repo nicht ganz
 den neuesten Stand hat, mit dem dieser Verlauf endete".
+
+> **Nachtrag Aufräumen:** Die Bilddateien, auf die dieser Verlauf und mehrere Kommentare
+> verwiesen (`uploads/`, 7 PNG/JPG, 618 KB = 34 % des Working Trees), sind aus dem Repo entfernt.
+> Sie waren ausschließlich in Kommentaren referenziert, die denselben Inhalt längst in Worten
+> trugen; die maschinenlesbare Form der Skizze ist Test **W9** in `tools/test_wrap.js`. In der
+> Git-Historie bleiben sie erhalten (kein History-Rewrite), der Working Tree und damit jeder
+> Kontext-Import ist sie los.
 
 Die vorherige Session hatte an genau diesem Repo gearbeitet. Ihr Verlauf enthielt:
 
@@ -94,8 +101,8 @@ python3 tools/build.py        # index.html neu bauen; Größe in den Commit
 | Werkzeug | Frage, die es beantwortet |
 |---|---|
 | `tools/probe_wrapclean.js` | **Das Abnahme-Kriterium.** Reine Testwelt (Boden + EIN Quader), jeder Schritt gültig. `V R T` als Argumente. |
-| `tools/probe_orbit2.js` | Orbit um die Levelsäule mit **echtem Wickel-Zwang** (Anker frei stehend süd-westlich). Liefert `corner`, `sweep`, `worst`, `jumpInfo`, `detourTrace`. |
-| `tools/probe_worst.js` | Der **schlimmste** blockierte Schritt eines Laufs, mit Geometrie, Kontakten und `_segBlocked`-Antwort. |
+| `tools/probe_orbit2.js` | Orbit um die Levelsäule mit **echtem Wickel-Zwang** (Anker frei stehend süd-westlich). Liefert `corner` (Eckübergang-Instrumentierung), `sweep` (Sweep-Zähler), `jumpInfo` (Kontext des größten Längensprungs), `detourTrace` (Umweg-Verlauf). ⚠ Messgeometrie: die Handbahn läuft durch die Levelgeometrie, siehe Abschnitt 9.1. |
+| ~~`tools/probe_worst.js`~~ | **wieder entfernt** (Aufräumen): `probe_orbit2.js` liefert denselben Befund über `jumpInfo` (Kontext des größten Längensprungs) und `detourTrace` (Umweg-Verlauf), und `probe_blocked.js` liefert Geometrie + Kontakte + `_segBlocked`-Antwort für blockierte Schritte. Der Befund aus Abschnitt 9.1 bleibt gültig und ist hier festgehalten. |
 | `tools/probe_blocked.js` | Erster blockierter Schritt + **Insert-Probe**: fragt `_tryInsertWrap` direkt, ob es eine Lösung gäbe. |
 | `tools/test_edgecross.js` | Unit- + Zufallstest für `edgeCross2D` (31 Assertions, 8000 Zufallsfälle). |
 | `tools/ref_edgecross.js` | Langsame Referenzfassung mit Residual-Prüfung — der Maßstab für die schnelle in `src`. |
@@ -118,6 +125,18 @@ der Nutzer wurde aufgefordert, ihn zu widerrufen. **Kein Token ist im Repo gespe
    fehlgeschlagenen Anker **lautlos alle** vorherigen Schritte (`AssertionError` am Ende, Datei
    unverändert). Besser: indexbasierte Anker (`s.index(...)`) und Kontrolle mit `grep -c` direkt
    danach. In dieser Session ist das dreimal passiert.
+3. **`.git` kann zwischen zwei Nachrichten verschwinden.** Das ist in diesem Projekt inzwischen
+   zweimal passiert (einmal in der Vorsession, einmal in dieser — der Arbeitsbaum lag vollständig
+   da, `.git` nicht). Nichts war verloren, weil alles gepusht war. Wiederherstellung:
+   ```bash
+   cd ~ && git clone -q https://github.com/lamachen/Grapple.git proj_new
+   cd proj_new && git checkout -b feature/pivot-solver origin/feature/pivot-solver
+   git config user.name lamachen && git config user.email 165836303+lamachen@users.noreply.github.com
+   diff -rq --exclude=.git ~/proj ~/proj_new      # muss leer sein, sonst Arbeitsbaum übernehmen
+   cd ~ && mv proj proj_wip && mv proj_new proj
+   ```
+   **Lehre:** nach jeder Änderung sofort committen **und** pushen; der lokale Arbeitsbaum ist keine
+   Sicherung. Und vor dem Aufräumen `git status` prüfen, nicht blind drauflos editieren.
 
 ---
 
@@ -627,8 +646,16 @@ Die pivot-Schalter sind **nicht** im UI-Panel verdrahtet (`check_panel.js` zähl
 29 Slider + 6 Schalter). A/B läuft über Umgebungsvariablen der Sonden
 (`MODE`, `DEADEND`, `SELFPEN`, `DEPTH`, `CORNER`) bzw. über `Object.assign` auf `ROPE_DEFAULTS`.
 
-Der Kommentarkopf über `wrapSolver` in `ROPE_DEFAULTS` enthält das vollständige Messprotokoll
-(v0, A, B, C, V-Schlaufe). **Wer pivot anfasst, liest zuerst diesen Block.**
+**Aufgabenteilung Code ↔ Doku (seit `00b4aec` + Aufräum-Commit):** Der Kommentarkopf über
+`wrapSolver` in `ROPE_DEFAULTS` enthält nur noch die ~20 Zeilen, die man beim Ändern dieser
+Schalter braucht (was an/aus ist, die Kopfzahl jeder Messung, wo der Rest steht). Herleitungen,
+Einzelzahlen, Fehlversuche und die offene Entscheidung stehen **nur hier**. Dasselbe gilt für den
+Befund-Block bei `_segBoxBeyond` (`_pivotEdgeHop`) und die Doku von `edgeCross2D` (Formel +
+die beiden Fallen `|d|²` und Residual-Pflicht bleiben im Code, der Rest hier).
+
+Grund: `src/02_rope.js` war auf 173,5 KB angewachsen, davon 18,3 KB Messprotokoll, das inhaltlich
+identisch in dieser Datei stand. Wer das Repo als Kontext lädt, zahlt das doppelt. Nach dem
+Umräumen: 157,4 KB, Kommentarzeilen 25 % → 22 %.
 
 ---
 

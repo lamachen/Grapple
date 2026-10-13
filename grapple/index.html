@@ -1472,153 +1472,27 @@ const ROPE_DEFAULTS = {
   flightReelSpeed:  18,    // m/s — Rate des automatischen Nachrollens im Flug
 
   // --- Pivot-Solver (A/B gegen legacy, siehe wrapSolver) ---------------------
-  // STAND v2 (Branch feature/pivot-solver, NICHT merged, legacy = Standard):
-  // Neu gegenüber v0/v1:
-  //   · edgeCross2D: EXAKTE Erkennung, welche Kante ein Seilsegment zwischen
-  //     zwei Substeps überstrichen hat (Seitenwechsel-Test f(s) = (p(s)−q)×d(s)
-  //     mit Koeffizienten aus drei Stützstellen + Residual-Pflicht P(s,t) == q;
-  //     geprüft in tools/test_edgecross.js gegen 8000 Zufallsfälle). Das
-  //     Quad-Containment von v0/v1 sah nur Überstreichungen, bei denen ein
-  //     ENDPUNKT an der Kante vorbeiläuft: 22 Treffer in 1440 Substeps.
-  //   · Sweep läuft jeden Substep und über alle 12 Kanten.
-  //   · Freigabe = Kraftkegel UND freie Sehne (jede Bedingung allein ist
-  //     notwendig, keine hinreichend).
-  //   · Selbst-Durchdringung: nur die TIEFE Variante killt den Kontakt.
-  //   · Blocker-Insert bleibt AN (der Sweep erkennt nur Kanten-Über-
-  //     streichungen; eine Sehne, die eine Box schneidet OHNE eine Kante zu
-  //     überstreichen, braucht die tangentiale Kantenwahl des Inserts).
-  //   · Doppelkanten-Schranke: dieselbe Kante derselben Box stand zweimal in
-  //     der Kontaktliste ([8, 9, 8]) — Pfad 17,64 m bei 15,69 m Referenz.
-  //
-  // MESSUNG A (vier test_wrap-Orbits, work/probe_pivot.js, MIT der
-  // Messhygiene-Maske aus test_wrap.js — Schritte, in denen die Hand selbst in
-  // Geometrie steht, zählen nicht. Ohne Maske sind die Zahlen wertlos: die
-  // Maske macht aus 19 % blockiert 0,3 %, weil der Orbit-Radius 3,2/4,5 m die
-  // Hand durch die Säule führt):
-  //   Lauf                  blockiert      maxSprung       maxUmweg    Releases(m.Sprung)
-  //   enger Orbit          legacy  0,0 %   8,89 m   8,81 m    7 (1)
-  //                          pivot  1,3 %   4,57 m  11,30 m   13 (12)
-  //   enger Orbit schnell  legacy  7,1 %  11,59 m  59,53 m    7 (4)
-  //                          pivot  2,5 %   2,54 m  11,70 m   24 (13)
-  //   weiter Orbit         legacy  0,3 %   8,49 m  11,95 m    7 (1)
-  //                          pivot  0,1 %   2,50 m  10,91 m    9 (3)
-  //   weiter Orbit schnell legacy  2,5 %   4,94 m  39,30 m   12 (4)
-  //                          pivot  0,8 %   3,35 m  11,20 m   16 (11)
-  //   ⇒ pivot gewinnt klar bei Blockaden und Längensprüngen (59,5 → 11,7 m),
-  //     verliert aber bei Freisetzungen MIT Sprung (12-13 gegen 1-4): die
-  //     Kegel-UND-Sehne-Regel löst öfter, und jedes Lösen kostet Länge.
-  // MESSUNG B (tools/probe_orbit2.js, Anker SÜD-WESTLICH der Säule, also mit
-  // echtem Wickel-Zwang — der alte Messaufbau hatte den Anker auf der Säule
-  // selbst, dort kann die Sehne sie nie schneiden und es gab nichts zu
-  // wickeln):
-  //   legacy: blockiert 3 (0,2 %), maxTiefe 0,37 m, maxSprung 0,07 m, 3 Rebuilds
-  //   pivot : blockiert 73 (5,4 %), maxTiefe 5,37 m, maxSprung 2,17 m, 0 Rebuilds
-  //           70 von 73 ohne jeden Säulenkontakt, 44 verworfene Kontakte
-  //   (Zusatzmessung: Sackgassen-Neuaufbau im pivot-Modus, pivotDeadEnd
-  //    'rebuild', macht es schlechter statt besser: 15,9 % blockiert,
-  //    165 Kontakt-Verwürfe, dafür maxSprung 0,74 m statt 2,17 m.)
-  //   ⇒ Hier ist pivot deutlich schlechter. Diagnose: die Selbst-Durch-
-  //     dringungs-Regel wirft Kontakte raus, deren Sehne tief durch die eigene
-  //     Box schneidet (Kontakt auf der falschen Seite), und der Insert setzt
-  //     dieselbe Kante wieder ein — ein Kreislauf, aus dem nur die im
-  //     pivot-Modus abgeschalteten Pflaster herauskämen — und der Neuaufbau
-  //     ist messbar schlechter (s. o.). Regel ganz aus: 22 % blockiert (dann
-  //     bleibt die falsche Wicklung ewig stehen).
-  //   Die Ursache ist inzwischen eingegrenzt und steht als Befund-Block bei
-  //     `_segBoxBeyond`: Der Kontakt sitzt auf der senkrechten Kante in
-  //     halber Höhe (Parameter 2,5 von 6 m), beide Kantenenden sind gleich
-  //     weit weg — es gibt dort keine „nächste" Ecke, also auch keinen
-  //     Eckübergang. `_cornerSlide` feuert in beiden Modi 0 Mal, weil
-  //     `_atEnd` in diesen Schritten false ist (1704 bzw. 1561
-  //     Kontakt-Schritte gezählt). Nötig ist ein lokales Neulegen der Route
-  //     um die blockierende Box (oder ECKPUNKTE als eigenständige Kontakte),
-  //     nicht eine weitere Reparatur am Kontakt.
-  //
-  // WICHTIG zu Messung B: Ihre „schlimmsten" Schritte sind Testaufbau, nicht
-  // Solver-Defekt. Die Handbahn (Radius 4,5 m um die Säulenmitte) läuft durch
-  // die Levelgeometrie — Box 26 reicht 3,54 m, Box 27 3,68 m von der Mitte.
-  // Die Maske „gültige Hand" (0,4 m Abstand) sortiert diese Schritte aus,
-  // aber sie sortiert GENAU die aus, in denen die Sehne die Boxecke schneidet.
-  // Nachgemessen mit tools/probe_worst.js: der schlimmste blockierte Schritt
-  // lag bei legacy (t = 10,41) an einer Hand 0,03 m innerhalb von Box 26 und
-  // bei pivot (t = 3,06) an einer Hand 1,7 m innerhalb — die Maske griff dort
-  // nicht, weil die Hand ausserhalb des aufgepolsterten Bereichs wieder
-  // auftauchte, während die Sehne längst durch die Box lief. Deshalb Messung C.
-  //
-  // MESSUNG C (tools/probe_wrapclean.js, REINE Testwelt: Boden + EIN Quader
-  //   3,2 × 10 × 3,2 m, Anker frei stehend bei (−9 | 2,5 | 0), Hand auf
-  //   Kreisbahn Radius 4,0 m mit 5 m/s, 16 s = 1920 Schritte, ALLE gültig —
-  //   halbe Diagonale 2,26 m, also 1,74 m Luft; zweimal identisch gelaufen):
-  //     legacy: blockiert 25 (1,30 %), maxTiefe 1,76 m, maxSprung 0,053 m,
-  //             maxUmweg 14,59 m, Kontaktwechsel 11, resyncs 0
-  //     pivot : blockiert 17 (0,89 %), maxTiefe 4,53 m, maxSprung 6,689 m,
-  //             maxUmweg 14,40 m, Kontaktwechsel 14, selfPen 5
-  //   ⇒ pivot ist bei den Blockaden leicht besser und bei der Längenstetigkeit
-  //     katastrophal schlechter (6,69 m gegen 0,053 m Sprung). Der Sprung kommt
-  //     aus den 5 Verwürfen der Selbst-Durchdringungs-Regel: ein verworfener
-  //     Kontakt nimmt seine Auslenkung SOFORT aus der Pfadlänge, ohne
-  //     Offset-Fade. Das ist der Punkt, an dem pivot als nächstes ansetzen
-  //     muss — nicht bei der Erkennung.
-  //
-  // DIE V-SCHLAUFE (in BEIDEN Modi, betrifft also auch das ausgelieferte Spiel):
-  //   t ≈ 6 s, Hand (−3,71 | 2,5 | 1,50), Anker (−9 | 2,5 | 0): die freie
-  //   Route ist 5,50 m, der Solver hält 19,70 m — 14,20 m Umweg, mit drei
-  //   Kontakten, die alle auf der ABGEWANDTEN Seite der Säule liegen (Kanten
-  //   10, 9, 8 auf (1,7 | 2,5 | ±1,7) und (−1,7 | 2,5 | −1,7)). Jeder einzelne
-  //   ist lokal notwendig: die Sehne zum Nachbarkontakt läuft durch die Säule,
-  //   also directBlocked ⇒ Kegel UND Sehne halten ihn. Die MENGE ist falsch,
-  //   nicht das Element; lokale Freigabe kann das prinzipiell nicht sehen.
-  //   `_pivotCleanup` (neu, pivot-eigen, 10 Hz, nur im Attached-Betrieb)
-  //   vergleicht deshalb die ganze Kontaktmenge mit der gedächtnislosen
-  //   Referenz und tauscht sie, wenn die Referenz strenger kürzer UND
-  //   kollisionsfrei ist — aber nur, wenn Live- und Referenz-Route um jede
-  //   kontaktierte Box denselben Umlaufwinkel haben (Homotopieklasse
-  //   erhalten). Die erste Fassung prüfte stattdessen „Live-Winkel ≈ 0" und
-  //   hielt damit 50 von 52 Aufrufen, weil das Zickzack selbst ±π/2 windet:
-  //   „gewickelt" und „Zickzack" sind über den Winkel der Live-Route allein
-  //   nicht zu unterscheiden.
-  //   Gemessen (76 Aufrufe): 30 × Referenz selbst blockiert, 46 × Drift unter
-  //   der Schwelle, 0 × Tausch möglich, maxUmweg unverändert 14,40 m. Ein
-  //   Versuch, die Referenz in einer Schleife frei zu lösen, hat sie zwar
-  //   repariert (10,66 m quer durch die Säule statt 9,06 m Luftlinie), am
-  //   Ergebnis aber nichts geändert und die Kontakt-Verwürfe von 125 auf 4805
-  //   getrieben — zurückgenommen, Befund steht bei `_freshRoute`.
-  //   ⇒ Dieses Aufräumen erreicht die V-Schlaufe nicht, und der Grund ist
-  //     grundsätzlich: Der Zustand IST ein Topologiewechsel (Live-Winkel
-  //     −4,48 rad gegen Referenz +1,80 rad), und ein Topologiewechsel unter
-  //     Last ist exakt der gemeldete Skizzen-Fehler. „V-Schlaufe aufräumen"
-  //     und „Wicklung nicht teleportieren" sind dieselbe Entscheidung mit
-  //     umgekehrtem Vorzeichen. Das ist eine Produktentscheidung, keine
-  //     fehlende Zeile Code — ausgeliefert wird die konservative Seite.
-  //
-  // STAND v0 (zur Referenz, Messung OHNE Maske — deshalb andere Zahlen):
-  // Kraftkegel-Freigabe (_pivotRelease) und Sweep-Insert überstrichener
-  // vertikaler Kanten sind drin und laufen stabil, bringen in der
-  // Orbit-Messung (probe_pivot.js, vier test_wrap-Orbits) aber noch KEINE
-  // Verbesserung, solange der legacy-Insert als Sicherheitsnetz mitläuft und
-  // die Akkumulation weiterhin erzeugt:
-  //   legacy : blockiert  3,6/14,8/19,0/22,4 %   maxSprung  8,89/11,59/ 8,49/ 4,94 m
-  //            maxUmweg   3,64/59,58/12,5/40,42 m
-  //   pivot  : blockiert  3,3/13,6/19,0/27,4 %   maxSprung  8,89/ 9,34/ 8,49/ 7,20 m
-  //            maxUmweg   4,97/84,03/14,86/48,68 m   pivotInserts 0-7/Lauf
-  // Diagnose: die Sweep-Quads bleiben bei 120 Hz meist unter der Kantengröße
-  // (Insert feuert zu selten), und die Freigabe-KeGel werden durch die vom
-  // legacy-Insert gesetzten Zickzack-Kontakte nicht erreicht. Nächster
-  // Schritt: pivot-Modus OHNE legacy-Insert (auch Erstkontakt über Sweep,
-  // horizontale Kanten einbeziehen), dann Pflaster entfernen, wenn W5-W8 grün.
-
-  pivotSelfPenRule: 'margin',  // 'margin' = Auflagebereich-Regel, 'off' = aus
-  pivotDeadEnd: 'off',         // Sackgassen-Neuaufbau im pivot-Modus:
-                               //   'off' = aus (Voreinstellung, s. `settled`),
-                               //   'rebuild' = Neuaufbau als letzter Ausweg
-  pivotCornerSlide: false,     // Eck-Übergang im pivot-Modus. A/B gemessen:
-                               //   ohne Unterschied — im pivot-Modus kommt es
-                               //   in 1680 Substeps zu 0 Aufrufen (work/
-                               //   probe_orbit2.js, Instrumentierung auf
-                               //   _cornerSlide). Der Schalter bleibt als
-                               //   Griff für die nächste Runde stehen.
-  pivotSelfPenDepth: 0.5,      // - Anteil der Querschnittsdiagonale, ab dem die
-                               //   Selbst-Durchdringung als unmöglich gilt
+  // Experiment hinter diesem Schalter, NICHT gemergt. Der vollständige Stand —
+  // Herleitungen, alle Messungen A/B/C mit Zahlen, die verworfenen Wege und die
+  // offene Produktentscheidung — steht in doc/VERLAUF-PIVOT.md. Hier im Code
+  // bleiben nur die Fakten, die man beim Ändern dieser Zeilen braucht:
+  //   · pivot findet Kontakte zusätzlich per Kanten-Überstreichung (`_pivotSweep`
+  //     + `edgeCross2D`), der Blocker-Insert bleibt aber AN (ohne ihn 18,6 %
+  //     blockierte Schritte, 243 von 250 ohne jeden Säulenkontakt).
+  //   · Freigabe = Kraftkegel UND freie Sehne. Jede Bedingung allein ist
+  //     notwendig, keine hinreichend (Kegel allein: 382 von 383 blockierte
+  //     Schritte; Sehne allein: der gemeldete Skizzen-Fall).
+  //   · Pflaster im pivot-Modus aus: Bogus-Drop, Drift-Resync, `_cornerSlide`
+  //     (Schalter `pivotCornerSlide`), Sackgassen-Neuaufbau (`pivotDeadEnd`).
+  //     Neuaufbau wieder anzuschalten ist messbar schlechter: 5,4 → 15,9 %
+  //     blockiert, 44 → 165 Kontakt-Verwürfe.
+  //   · Stand Messung C (tools/probe_wrapclean.js, reine Testwelt): legacy
+  //     blockiert 1,30 % / maxSprung 0,053 m, pivot 0,89 % / maxSprung 6,689 m.
+  //     pivots größter Rückstand ist die Längenstetigkeit, nicht die Erkennung.
+  //   · Umweg 14,4 m („V-Schlaufe") ist in BEIDEN Modi offen und eine
+  //     Produktentscheidung: `_pivotCleanup` tauscht die Kontaktmenge nur
+  //     innerhalb derselben Homotopieklasse, und die V-Schlaufe ist ein
+  //     Topologiewechsel — derselbe Vorgang wie der gemeldete Skizzen-Fall.
   wrapSolver:   'legacy',  // 'legacy' = Insert per Raycast/Greedy + Freigabe per
                            //          Sehne/Sichtlinie (+ Pflaster), 'pivot' =
                            //          Freigabe über den Kraftkegel an der Kante
@@ -1637,9 +1511,11 @@ const ROPE_DEFAULTS = {
   // einem gefangenen Seil wird diese Sehne irgendwann frei (Sicht auf den
   // Anker), während das Seil physikalisch noch um die Objektseite liegt.
   // Folge: alle Umlenkpunkte lösen sich binnen weniger Ticks und das Seil
-  // steht als direkte Linie neu da — exakt der gemeldete Fehler (Skizze
-  // uploads/image.png: zwei Umlenkungen an einer dünnen Säule, Spieler
-  // wechselt die Seite, Seil „ignoriert" das Objekt).
+  // steht als direkte Linie neu da — exakt der gemeldete Fehler.
+  // (Fundstelle: Nutzerskizze vom 2026-10-12 — zwei Umlenkungen an einer
+  // dünnen Säule, Spieler wechselt die Seite, das Seil „ignoriert" das
+  // Objekt. Nachgebaut als Regressionstest W9 in tools/test_wrap.js; die
+  // Bilddatei selbst ist nicht mehr im Repo, die Beschreibung trägt.)
   // Deshalb: solange der Umlaufwinkel der Route um die Box eines Kontakts
   // über dieser Toleranz liegt, darf dieser Kontakt nicht freigegeben werden
   // (Ausnahme: er steht am KantenENDE, kann also real ausgleiten).
@@ -1761,31 +1637,25 @@ const _ECR1 = [];       // wiederverwendete Wurzelliste — keine Allokation pro
  * Exakter Test: hat das Seilsegment (a→b), dessen Endpunkte sich linear nach
  * (a2→b2) bewegen, den Punkt q in der (u,v)-Ebene ÜBERSTRICHEN?
  *
- * Verfahren — Vorzeichenwechsel der „Seite", nicht Fläche-enthält-Punkt:
- *   side_p(s) = (P(s) − q) × d(s)      mit d = Segmentrichtung, × = 2D-Det.
- * Ein Punkt kann eine Strecke nur dann überstreichen, wenn sich mindestens
- * EINER ihrer Endpunkte von der einen auf die andere Seite von q bewegt
- * (oder umgekehrt). side_p(s) ist ein Polynom 2. Grades in s, dessen
- * Steigung an den Rändern exakt auswertbar ist; der Vorzeichenwechsel wird
- * deshalb pro Rand mit einer gedämpften Newton-Iteration auf der jeweiligen
- * Monotonie-Strecke gesucht und danach in die exakte quadratische Formel
- * überführt. Das ist zahlenstabil auch dort, wo die bilineare Fläche fast
- * entartet — genau der Wickel-Fall: Sehne 29,8 m, Handhub 8 cm, die Jacobi-
- * Determinante der Flächen-Parametrisierung liegt dort bei ~1e−13
- * (gemessen; ein Flächen-Schnittverfahren bricht an dieser Stelle ab).
+ * Die von der Bewegung aufgespannte Fläche ist bilinear:
+ *   P(s,t) = a + t·e + s·(f + t·g)      s = Zeit ∈ [0,1], t ∈ [0,1]
+ *   e = b−a,  f = a2−a,  g = (b2−a2) − (b−a)      [Ecken a, b, b2, a2]
+ * g ist der Anteil der Bewegung, der die RICHTUNG ändert: bei Translation 0
+ * (Parallelogramm), bei Schwenk um einen Endpunkt ein Dreieck.
  *
- * Zum gefundenen Zeitpunkt s wird der Laufparameter t des Kreuzungspunkts
- * exakt gebildet (Schnitt der Strecke mit der Geraden durch q, senkrecht zur
- * Bewegungsrichtung ist nicht nötig — q liegt per Konstruktion auf der
- * Geraden) und muss in [0,1] liegen, damit die KANTE (nicht ihre Verlänge-
- * rung) überstrichen wurde.
+ * Gelöst wird über den Seitenwechsel
+ *   f(s) = (a(s) − q) × d(s),   a(s) = a + s·f,   d(s) = e + s·g
+ * f ist exakt quadratisch in s, identisch für BEIDE Endpunkte (d × d = 0), und
+ * die Koeffizienten werden an den Stützstellen 0, ½, 1 AUSGEWERTET statt
+ * symbolisch hergeleitet — vier Herleitungen lieferten jeweils plausible, aber
+ * falsche Wurzeln. Zu jeder Wurzel: t = ((q − a(s))·d(s))/|d(s)|²  (|d|², nicht
+ * |d|), danach Pflicht-Residual |P(s,t) − q| ≤ 1e−9·Skala. Ohne das Residual:
+ * 282 Scheintreffer in 4000 Zufallsfällen.
  *
- * Warum der Test überhaupt nötig ist (gegenüber „Eckpunkt in der swept-Quad",
- * v0/v1): Die Quad enthält einen Eckpunkt nur, wenn sich ein ENDPUNKT des
- * Segments an ihm vorbeibewegt. Der Normalfall beim Wickeln ist der andere —
- * die Hand gleitet seitlich und das Segment schneidet die Kante in seiner
- * Mitte. Bei 6 m Sehnenlänge und 8 cm Handweg pro Substep meldete das
- * Quad-Verfahren 22 Treffer in 1440 Substeps; 205 Blockaden folgten daraus.
+ * Änderungen hier nur gegen tools/test_edgecross.js (31 Assertions, 8000
+ * Zufallsfälle). Herleitung, alle Fehlversuche und der Grund, warum das
+ * Quad-Verfahren von v0/v1 zu wenig sah (22 Treffer in 1440 Substeps):
+ * doc/VERLAUF-PIVOT.md Abschnitt 6.
  */
 function edgeCross2D(au, av, bu, bv, a2u, a2v, b2u, b2v, qu, qv) {
   /* Bewegung der beiden Endpunkte während des Substeps */
@@ -2646,154 +2516,20 @@ class RopePathSolver {
     }
   }
 
-  /* ------------------------------------------------------------------------
-     BEFUND (nicht implementiert): warum ein „Kantenwechsel an der Ecke" den
-     pivot-Modus nicht rettet — _pivotEdgeHop, zwei Anläufe, beide verworfen.
-
-     Der Defekt: Ein Kontakt sitzt auf der senkrechten Nordwest-Kante einer Box
-     in halber Höhe (gemessen: Berührpunkt (30,4 | 2,5 | −27,4), Kantenlänge
-     6 m, Parameter 2,5 m). Die Hand läuft nach Westen, die Sehne schneidet
-     die Box immer tiefer (0,28 → 1,93 → 5,14 m), die tiefe Selbst-
-     Durchdringungs-Regel wirft den Kontakt schließlich raus, der Blocker-
-     Insert setzt dieselbe Kante neu — 44 Verwürfe, 70 von 73 blockierten
-     Schritten ohne jeden Säulenkontakt.
-
-     Ansatz 1 — Übergang auf eine Nachbarkante derselben Ecke (wie
-     `_cornerSlide`, aber mit Eckpunkt als zulässigem Ziel, weil die Tangente
-     an eine Nachbarkante von einer Ecke aus per Konstruktion AUF der Ecke
-     liegt, t = 0): scheitert daran, dass die Ecke nicht bestimmbar ist. Der
-     Berührpunkt liegt EXAKT in Kantenmitte, beide Enden sind 2,50 m entfernt;
-     auch der Parameter hilft nicht (t = 2,5 von 6). Die erste Fassung nahm
-     deshalb per Vergleichsoperator immer das erste Ende — die SÜDWEST-Ecke —
-     und beide Kandidaten landeten unter dem Boden (y = −0,1, pointFree ⇒
-     nein) bzw. 1,3 m neben der Ecke (reach ⇒ nein). 0 Hops.
-
-     Ansatz 2 — Eckwahl über den Kantenparameter: identisches Ergebnis, weil
-     der Parameter in Kantenmitte steht. Das ist kein Implementierungsfehler,
-     sondern die Aussage: An einer senkrechten Kante in halber Höhe gibt es
-     keine „nächste" Ecke. Die richtige Route wäre hier ein Umweg ÜBER die
-     obere Ecke und wieder hinunter, also ein zusätzlicher Kontakt auf einer
-     horizontalen Kante — ein lokales Neulegen der Route um diese Box, kein
-     Eckübergang.
-
-     Ebenso gemessen und verworfen: Sackgassen-Neuaufbau im pivot-Modus
-     (`pivotDeadEnd: 'rebuild'`) verschlechtert alles — 5,4 → 15,9 %
-     blockiert, 44 → 165 Kontakt-Verwürfe, weil `converge()` Kontakte liefert,
-     die die pivot-Regeln sofort wieder verwerfen. Der Schalter bleibt für
-     weitere A/B-Versuche stehen, Voreinstellung 'off'.
-
-     Konsequenz für den nächsten Schritt: pivot braucht ein lokales
-     Neulegen der Route um die blockierende Box (im Homotopie-Sinn: kürzeste
-     freie Route mit derselben Kontaktfolge), oder die Kontakt-Modellierung
-     muss ECKPUNKTE als eigenständige Kontakte zulassen. Beides ist größer als
-     eine Reparatur und gehört nicht mehr in diesen Commit.
-     ------------------------------------------------------------------------ */
-  /**
-   * PIVOT-Aufräumen: Kontaktmenge ersetzen, wenn die gedächtnislos gelöste
-   * Route strenger kürzer UND kollisionsfrei ist — aber NIE gegen eine
-   * Wicklung.
-   *
-   * Der Defekt, den das behebt (tools/probe_wrapclean.js, reine Testwelt:
-   * Boden + EIN Quader, Hand auf Kreisbahn, jeder Schritt gültig):
-   *   Hand (−3,71 | 2,5 | 1,50), Anker (−9 | 2,5 | 0), freie Route 5,50 m —
-   *   der Solver hält 19,70 m, also 14,20 m Umweg, mit drei Kontakten, die
-   *   alle auf der ABGEWANDTEN Seite der Säule liegen (Kanten 10, 9, 8 auf
-   *   (1,7 | 2,5 | ±1,7) und (−1,7 | 2,5 | −1,7)). In BEIDEN Modi, legacy
-   *   wie pivot: maxUmweg 14,36 bzw. 14,40 m. Das ist die gemeldete
-   *   „V-Schlaufe".
-   *
-   * Warum keine lokale Regel daran kommt: Jeder der drei Kontakte ist für
-   * sich genommen NOTWENDIG — die Sehne zum Nachbarkontakt läuft durch die
-   * Säule, also ist `directBlocked` wahr, Kegel UND Sehne halten ihn. Die
-   * Menge ist falsch, nicht das Element. Lokale Freigabe kann das prinzipiell
-   * nicht sehen, und genau dafür hatte legacy den Drift-Resync (Vergleich
-   * gegen die gedächtnislose Referenz).
-   *
-   * Warum das hier trotzdem kein Pflaster ist: Die legacy-Variante braucht
-   * zwei Zusatzregeln (Teilmenge der Kontaktmenge, sonst „Solver-Müll"
-   * schrittweise entfernen), weil sie ohne Topologie-Begriff auskommen muss.
-   * Hier entscheidet der UMLAUFWINKEL: liegt die Route um irgendeine der
-   * kontaktierten Boxen mit |Winkel| über `wrapWindTol` herum, ist das Seil
-   * topologisch gefangen und darf seine Homotopieklasse unter Last nicht
-   * wechseln — dann passiert nichts (Zähler `pivotWindHeld`). Liegt sie
-   * nirgends herum, sind die Kontakte Reste einer bereits abgewickelten
-   * Schleife, und der Tausch ist physikalisch korrekt. Der Längensprung geht
-   * wie bei jedem Topologiewechsel in den Offset-Fade (`resyncFade`), die
-   * Constraint sieht also eine stetige Länge.
-   *
-   * Das ist dieselbe Schranke, die `_releaseTopoOK` für die lokale Freigabe
-   * setzt — nur eben auf die ganze Kontaktmenge angewandt statt auf einen
-   * einzelnen Kontakt.
-   */
-  _pivotCleanup() {
-    const P = this.p;
-    const fr = this._freshRoute();
-    if (!fr) { this.stats.pcNull = (this.stats.pcNull || 0) + 1; return false; }   // Referenz selbst blockiert
-    /* Eine kontaktlose Referenz ist ein Topologiewechsel; bei EINEM Kontakt
-       überlässt legacy das der lokalen Freigabe mit ihrer Hysterese. Hier
-       gilt dasselbe, aber die Schranke ist der Umlaufwinkel, nicht die
-       Kontaktzahl — bei Winkel ≈ 0 darf der Einzelkontakt sofort weg.     */
-    if (this.lengthGeo - fr.len <= (P.resyncDrift || 0.4)) {
-      this.stats.pcDrift = (this.stats.pcDrift || 0) + 1;
-      return false;
-    }
-
-    /* Schranke: HOMOTOPIEKLASSE, nicht „Winkel ungleich null".
-       Die erste Fassung prüfte |Umlaufwinkel der Live-Route| > wrapWindTol und
-       hielt damit 50 von 52 Aufrufen — auch die V-Schlaufe, die sie doch
-       aufräumen sollte: deren Zickzack hat selbst einen Umlaufwinkel von
-       ±π/2 um die Säule (Hand → (1,7|1,7) → (1,7|−1,7) → (−1,7|−1,7) → Anker,
-       drei rechtwinklige Knicke, alle konvex). „Gewickelt" und „Zickzack" sind
-       über den Winkel der Live-Route allein also NICHT zu unterscheiden.
-       Entscheidend ist der Vergleich: Live-Route und gedächtnislose Referenz
-       müssen um jede kontaktierte Box denselben Umlaufwinkel haben. Dann
-       bleibt der Tausch in derselben Homotopieklasse — das Seil wechselt nicht
-       die Seite, es wird nur kürzer eingerichtet. Weichen die Winkel
-       auseinander, ist es ein echter Topologiewechsel, und der bleibt der
-       lokalen Freigabe mit ihrer Hysterese überlassen (Skizzen-Fall: das
-       topologisch gefangene Seil darf nicht durch die Hintertür des
-       Aufräumens teleportieren).                                        */
-    const seen = this._pcSeen || (this._pcSeen = []);
-    seen.length = 0;
-    /* Referenz-Route für den Winkelvergleich nachbauen */
-    const rpts = this._pcPts || (this._pcPts = []);
-    rpts.length = 0;
-    rpts.push(this._A);
-    for (const f of fr) rpts.push(f.p);
-    rpts.push(this._B);
-    const tol = P.wrapWindTol || 0.6;
-    for (const w of this.wraps) {
-      if (!w.box || w.edgeIdx < 0) continue;
-      let known = false;
-      for (const b of seen) if (b === w.box) known = true;
-      if (known) continue;
-      seen.push(w.box);
-      const wLive = this._pathWindingXZ(this.pts, w.box);
-      const wRef = this._pathWindingXZ(rpts, w.box);
-      if (Math.abs(wLive - wRef) > tol) {
-        this.stats.pivotWindHeld = (this.stats.pivotWindHeld || 0) + 1;
-        return false;                            // echter Topologiewechsel: kein Tausch
-      }
-    }
-
-    const gain = Math.max(0, this.lengthGeo - fr.len);
-    this.stats.pcGainSeen = (this.stats.pcGainSeen || 0) + gain;
-    this.wraps.length = 0;
-    for (const f of fr) {
-      const w = makeWrap(f.box, f.edgeIdx);
-      vcopy(w.p, f.p);
-      if (f.box.dynamic) vsub(w.localOff, f.p, f.box.pos);
-      this.wraps.push(w);
-    }
-    this._buildPts(this._A, this._B);
-    this._measure();
-    this._lenOff = (this._lenOff || 0) + gain;
-    this.length = this.lengthGeo + this._lenOff;
-    this.stats.pivotSwaps = (this.stats.pivotSwaps || 0) + 1;
-    this.stats.pivotSwapGain = (this.stats.pivotSwapGain || 0) + gain;
-    return true;
-  }
-
+  /* BEFUND, nicht implementiert — `_pivotEdgeHop` (Kantenwechsel an der Ecke),
+     zwei Fassungen gebaut, beide 0 Treffer, wieder entfernt:
+     Ein Kontakt auf der senkrechten Nordwest-Kante in halber Höhe
+     (Berührpunkt (30,4 | 2,5 | −27,4), Kantenlänge 6 m, Parameter 2,5 m) hat
+     BEIDE Kantenenden gleich weit entfernt — es gibt dort keine „nächste"
+     Ecke. Fassung 1 wählte die Ecke über `vdist(w.p, w.p0) <= vdist(w.p, w.p1)`
+     und nahm damit immer das erste Ende (Südwest-Ecke): beide Kandidaten
+     landeten unter dem Boden (y = −0,1) bzw. 1,3 m neben der Ecke. Fassung 2
+     wählte über den Kantenparameter — identisches Ergebnis, weil der Parameter
+     in der Mitte steht. `_cornerSlide` feuert aus demselben Grund in BEIDEN
+     Modi 0 Mal (1561 bzw. 1704 Kontakt-Schritte gezählt, `_atEnd` immer false).
+     Nötig ist ein lokales Neulegen der Route um die Box (oder Eckpunkte als
+     eigenständige Kontakte), kein Eckübergang.
+     Ausführlich mit allen Zahlen: doc/VERLAUF-PIVOT.md Abschnitt 8.        */
   /**
    * Läuft die Strecke a→b durch die Box — und wenn ja, wie weit weg vom
    * Punkt `nearT` (Parameter des zugehörigen Kontakts auf dieser Strecke)

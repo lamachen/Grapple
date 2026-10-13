@@ -237,8 +237,9 @@ nie während Flug, Setzen oder laufendem Release):
   gedächtnislos frisch gerechnete, streng kollisionsfrei validierte Referenz.
   Übernommen wird nur eine **Teilmenge** der eigenen Kontakte — also ein
   Aufräumen, nie ein Umbauen. Ein Seil wechselt dadurch nie die Objektseite
-  (genau der Sprung, den die Skizze `uploads/image.png` zeigt, bleibt
-  ausgeschlossen). Eine kontaktlose Referenz gilt erst ab zwei Kontakten,
+  (genau der Sprung aus der Nutzerskizze vom 2026-10-12 — Spieler wechselt
+  die Seite, das Seil nimmt den direkten Weg durch die Säule — bleibt
+  ausgeschlossen; nachgebaut als Test W9 in `tools/test_wrap.js`). Eine kontaktlose Referenz gilt erst ab zwei Kontakten,
   denn der Einzelkontakt hat mit der lokalen Release-Hysterese seinen eigenen,
   gleitenden Mechanismus.
 * Die Pfadlänge wird nach beiden Eingriffen über einen linear abklingenden
@@ -265,8 +266,9 @@ weiter. Preis: `bench.js` D (nur Pfad-Solver) 58,7 → 105,5 µs/Aufruf für die
 Referenzrechnung, C +11 % — absolut ≈ 1,5 ms/s Laufzeit.
 
 **Folge-Commit: topologische Freigabeschranke.** Der Skizzen-Fall
-(`uploads/image.png`: zwei Umlenkungen an einer dünnen Säule, Spieler wechselt
-die Seite, Sicht auf den Anker wird frei) war damit noch nicht erfasst — er
+(zwei Umlenkungen an einer dünnen Säule, Spieler wechselt die Seite, Sicht auf
+den Anker wird frei; nachgebaut als Test W9 in `tools/test_wrap.js`) war damit
+noch nicht erfasst — er
 entsteht nicht in der Sackgasse, sondern in der Release-Regel selbst: die
 lokale Sehne wird frei, sobald die Sichtlinie frei ist, und alle Kontakte
 lösen sich binnen weniger Ticks, obwohl das Seil topologisch um die
