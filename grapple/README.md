@@ -28,12 +28,75 @@ keine Netzwerkzugriffe.** Funktioniert offline und in der In-App-Vorschau.
 
 ---
 
+## Orientsierung — für frische Sessions, neue Mitarbeitende und Agenten
+
+Dieser Abschnitt existiert, damit jemand ohne Vorwissen nicht an den vier Fallen
+scheitert, die dieses Projekt bisher Zeit gekostet haben.
+
+**Was hier ausgeliefert wird.** Ein einziges `index.html` (WebGL2, keine
+Abhängigkeiten, kein Netzwerk). Entsteht aus `src/*.js` + `tools/template.html`.
+
+**Reihenfolge zum Einlesen.**
+
+| Datei | Was sie trägt |
+|---|---|
+| `README.md` (diese) | Start, Steuerung, Verifikation, Struktur |
+| [doc/ARCHITEKTUR.md](doc/ARCHITEKTUR.md) | ★ **Warum** das System so gebaut ist. 20 Kapitel, Messwerte, bekannte Grenzen mit Defekt-Nummern (#35 … #53), Portierungshinweise |
+| [doc/VERLAUF-PIVOT.md](doc/VERLAUF-PIVOT.md) | Arbeitsstand des laufenden Experiments: Ausgangslage, Glossar, jede Messung mit Zahlen, die verworfenen Wege, die offene Entscheidung |
+
+**Die vier Fallen.**
+
+1. **`index.html` nie von Hand editieren.** Es ist das gebaute Artefakt aus
+   `src/*.js` und liegt nicht im Repo. Nach jeder `src/`-Änderung:
+   `python3 tools/build.py`.
+2. **`test_wrap.js` hat 4 XFAIL-Zeilen — die sind gewollt.** Sie arretieren den
+   bekannten Wickel-Defekt, statt ihn schönzurechnen („9 bestanden, 0
+   fehlgeschlagen, 4 bekannter Defekt"). Sie verschwinden erst, wenn der Defekt
+   wirklich behoben ist; bis dahin sind sie die Messlatte. Wer sie auf „grün"
+   biegt, ohne den Defekt zu beheben, zerstört das einzige Frühwarnsystem.
+3. **`test_replay.js` R2 vergleicht einen Fingerabdruck.** Jede Physik-Änderung,
+   die Trajektorien verschiebt, bricht ihn — **absichtlich**. Dann bewusst neu
+   aufnehmen: `node tools/replay.js tools/fixtures/demo_orbit.json --runs=2
+   --write-fingerprint`, und im Commit begründen.
+4. **`wrapSolver: 'legacy' | 'pivot'`** in `ROPE_DEFAULTS` (`src/02_rope.js`) ist
+   der A/B-Schalter für einen **unfertigen** Ersatz-Solver. Ausgeliefert wird
+   `legacy`. `pivot` ist eingeschaltet messbar schlechter (Längenstetigkeit
+   6,69 m gegen 0,053 m Sprung) und hängt an einer offenen Produktentscheidung
+   — beides mit Zahlen in `doc/VERLAUF-PIVOT.md`. **Nicht auf `'pivot'`
+   umstellen und nicht an `edgeCross2D` herumrechnen, ohne
+   `tools/test_edgecross.js` laufen zu lassen**: vier verschiedene Herleitungen
+   derselben Formel lieferten jeweils plausible, aber falsche Ergebnisse.
+
+**Prozessregeln, die hier gelten.**
+
+* Alle Werkzeuge laufen headless — kein Browser, keine GPU, keine Secrets.
+* Vor jedem Commit alle sechs: `test_sim` (208), `test_wrap` (9 + 4 XFAIL),
+  `test_replay`, `test_browser`, `check_panel`, `test_edgecross` (31).
+  Danach `python3 tools/build.py`.
+* **Sofort committen UND pushen.** `.git` ist in diesem Projekt schon zweimal
+  beim Session-Handoff verschwunden, während der Arbeitsbaum liegen blieb;
+  beide Male war nur gepushter Stand gerettet.
+  Rezept: `doc/VERLAUF-PIVOT.md` §2, Arbeitsfalle 3.
+* **Ehrlichkeit vor Grün.** Dieses Repo dokumentiert Fehlversuche mit ihren
+  Zahlen (siehe die Liste „Nicht wiederholen" in `doc/VERLAUF-PIVOT.md`, 15
+  Einträge). Eine Messung, die nicht zum gewünschten Ergebnis führt, wird
+  eingetragen, nicht wiederholt, bis sie passt.
+
+**Werkzeuge unter `tools/`.** Neben den Tests: `replay.js` (F9-Aufnahmen
+deterministisch abspielen), `make_fixture.js`, `bench.js`, und vier Sonden, die
+messen statt abzunehmen — `probe_wrapclean.js` (**reine Testwelt, das
+Abnahme-Kriterium für den Solver**), `probe_orbit2.js` (Level-Orbit mit
+Wickel-Zwang), `probe_blocked.js` (warum bleibt ein Schritt blockiert),
+`probe_feel.js`, `probe_orbit.js`. Alle mit `MODE=legacy|pivot`.
+
+---
+
 ## Start
 
 1. `python3 tools/build.py` (einmal, oder nach jeder `src/`-Änderung).
 2. `index.html` im Browser öffnen (Chrome/Edge/Firefox/Safari, WebGL2).
-2. **Klicken** → Mauszeiger wird gesperrt, Audio startet.
-3. `ESC` beendet die Mauszeiger-Sperre.
+3. **Klicken** → Mauszeiger wird gesperrt, Audio startet.
+4. `ESC` beendet die Mauszeiger-Sperre.
 
 ---
 
