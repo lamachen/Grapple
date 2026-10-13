@@ -146,6 +146,32 @@ const ROPE_DEFAULTS = {
                            //        gearbeitet hat
   flightReelSpeed:  18,    // m/s — Rate des automatischen Nachrollens im Flug
 
+  // --- Pivot-Solver (A/B gegen legacy, siehe wrapSolver) ---------------------
+  // STAND v0 (Branch feature/pivot-solver, NICHT merged, legacy = Standard):
+  // Kraftkegel-Freigabe (_pivotRelease) und Sweep-Insert überstrichener
+  // vertikaler Kanten sind drin und laufen stabil, bringen in der
+  // Orbit-Messung (probe_pivot.js, vier test_wrap-Orbits) aber noch KEINE
+  // Verbesserung, solange der legacy-Insert als Sicherheitsnetz mitläuft und
+  // die Akkumulation weiterhin erzeugt:
+  //   legacy : blockiert  3,6/14,8/19,0/22,4 %   maxSprung  8,89/11,59/ 8,49/ 4,94 m
+  //            maxUmweg   3,64/59,58/12,5/40,42 m
+  //   pivot  : blockiert  3,3/13,6/19,0/27,4 %   maxSprung  8,89/ 9,34/ 8,49/ 7,20 m
+  //            maxUmweg   4,97/84,03/14,86/48,68 m   pivotInserts 0-7/Lauf
+  // Diagnose: die Sweep-Quads bleiben bei 120 Hz meist unter der Kantengröße
+  // (Insert feuert zu selten), und die Freigabe-KeGel werden durch die vom
+  // legacy-Insert gesetzten Zickzack-Kontakte nicht erreicht. Nächster
+  // Schritt: pivot-Modus OHNE legacy-Insert (auch Erstkontakt über Sweep,
+  // horizontale Kanten einbeziehen), dann Pflaster entfernen, wenn W5-W8 grün.
+
+  wrapSolver:   'legacy',  // 'legacy' = Insert per Raycast/Greedy + Freigabe per
+                           //          Sehne/Sichtlinie (+ Pflaster), 'pivot' =
+                           //          Freigabe über den Kraftkegel an der Kante
+                           //          und Insert über überstrichene Kanten.
+                           //          legacy bleibt Standard, bis W5–W8 grün.
+  pivotHoldTol:   0.05,    // -   Toleranz des Kegel-Tests: Reaktionskraft darf
+                           //       minimal aus dem Normalenkegel zeigen, ohne
+                           //       dass der Kontakt fällt (Rauschen, Gleiten)
+
   // --- Topologische Freigabeschranke ---------------------------------------
   // Ein Seil, das um ein Objekt HERUM liegt (Umlaufwinkel in der Draufsicht
   // deutlich von null), ist topologisch gefangen: Es kann nur über eine Kante
@@ -269,6 +295,20 @@ function edgeTouchPoint(A, B, p0, p1, outN, clearance, out) {
   return elen;
 }
 
+/** Punkt in der (ggf. nicht-konvexen) swept-Fläche zweier Segmente:
+    Zerlegung in zwei Dreiecke (a,b,b') und (a,b',a'). Draufsicht (x,z). */
+function pointInQuad2D(px, pz, ax, az, bx, bz, b2x, b2z, a2x, a2z) {
+  const inTri = (qx, qz, x1, y1, x2, y2, x3, y3) => {
+    const d1 = (qx-x2)*(y1-y2) - (x1-x2)*(qz-y2);
+    const d2 = (qx-x3)*(y2-y3) - (x2-x3)*(qz-y3);
+    const d3 = (qx-x1)*(y3-y1) - (x3-x1)*(qz-y1);
+    const neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+    const pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+    return !(neg && pos);
+  };
+  return inTri(px, pz, ax, az, bx, bz, b2x, b2z) || inTri(px, pz, ax, az, b2x, b2z, a2x, a2z);
+}
+
 /* -------------------------------------------------------------------------- */
 /*  Wrap-Kontakt (mit Gedächtnis)                                              */
 /* -------------------------------------------------------------------------- */
@@ -374,6 +414,49 @@ class RopePathSolver {
          Geometrie läuft: (a) alle Ketten-Nodes kollidieren immer, (b) jeder
          Stützpunkt der Render-Kurve wird aus fester Geometrie herausgeschoben.
          Während eines laufenden Release unterdrückt (sonst Ping-Pong).        */
+      /* 3a) PIVOT-INSERT: Kanten, die ein Seilsegment seit dem letzten
+             Topologie-Tick in der Draufsicht ÜBERSTRICHEN hat, werden zu
+             Kontakten — in der richtigen Reihenfolge und ohne die Sackgassen
+             der Greedy-Suche. v0: vertikale Kanten (in der Draufsicht ein
+             Punkt), swept-Fläche = Quad (a, b, b', a') aus altem und neuem
+             Segment. Der legacy-Insert darunter bleibt als Sicherheitsnetz
+             (Erstkontakt, horizontale Kanten) und läuft erst nach dem Sweep. */
+      if (P.wrapSolver === 'pivot' && this._prevPoly && this._prevPoly.n === this.pts.length) {
+        const prev = this._prevPoly;
+        for (let i = 0; i < this.pts.length - 1 && this.insertBudget > 0; i++) {
+          const a = this.pts[i], b = this.pts[i + 1];
+          const pa = prev.p[i], pb = prev.p[i + 1];
+          const ba = this.ptsBox[i], bb = this.ptsBox[i + 1];
+          const near = this._nearBoxes(a, b, ba, bb, null, []);
+          for (const bx of near) {
+            if (this.insertBudget <= 0) break;
+            for (let e = 0; e < 12; e++) {
+              const ea = CORNER_SIGNS[EDGE_PAIRS[e][0]], eb = CORNER_SIGNS[EDGE_PAIRS[e][1]];
+              if (ea[1] !== eb[1]) continue;              // nur vertikale Kanten (v0)
+              const qx = (ea[0]===1?bx.max[0]:bx.min[0]), qz = (ea[2]===1?bx.max[2]:bx.min[2]);
+              if (!pointInQuad2D(qx, qz, a[0],a[2], b[0],b[2], pb[0],pb[2], pa[0],pa[2])) continue;
+              let dup = false;
+              for (const w of this.wraps) if (w.box === bx && w.edgeIdx === e) dup = true;
+              if (dup) continue;
+              const p0 = this._pv0 || (this._pv0 = v3()), p1 = this._pv1 || (this._pv1 = v3()), nn = this._pv2 || (this._pv2 = v3());
+              boxEdge(bx, e, p0, p1, nn);
+              const cp = this._pv3 || (this._pv3 = v3());
+              edgeTouchPoint(a, b, p0, p1, nn, P.wrapClearance, cp);
+              if (_TP.t < 0.02 || _TP.t > _TP.elen - 0.02) continue;
+              if (!this.world.pointFree(cp, 0.02, true)) continue;
+              const w = makeWrap(bx, e);
+              vcopy(w.p, cp);
+              w.side = ((b[0]-a[0])*(qz-a[2]) - (b[2]-a[2])*(qx-a[0])) >= 0 ? 1 : -1;
+              this.wraps.splice(i, 0, w);
+              this.insertBudget--;
+              this.stats.pivotInserts = (this.stats.pivotInserts || 0) + 1;
+              this._buildPts(this._A, this._B);
+              break;
+            }
+          }
+        }
+      }
+
       this.insertBudget = P.wrapInsertsPerFrame;
       let releasing = false;
       for (const w of this.wraps) if (w.release > 0.001) { releasing = true; break; }
@@ -432,6 +515,12 @@ class RopePathSolver {
       if (!settled || releasing || !blockedNow || this.wraps.length === 0) this._deadEnd = 0;
       else if (!inserted && move < 0.02) this._deadEnd = (this._deadEnd || 0) + 1;
       else this._deadEnd = 0;
+
+      /* Polylinie dieses Ticks für den Sweep-Vergleich des nächsten merken. */
+      const ppoly = this._prevPoly || (this._prevPoly = { n: 0, p: [] });
+      while (ppoly.p.length < this.pts.length) ppoly.p.push(v3());
+      ppoly.n = this.pts.length;
+      for (let k = 0; k < this.pts.length; k++) vcopy(ppoly.p[k], this.pts[k]);
       /* Halte-Zustand statt Sackgasse: ist das blockierte Segment das hand-nahe
          UND zieht das Seil (Budget kürzer als der Pfad dieser Wicklung) UND
          ist die Route wirklich um die Box gewickelt, dann ist die Blockade
@@ -721,6 +810,55 @@ class RopePathSolver {
   }
 
   /**
+   * PIVOT-FREIGABE: lokale, stetige Kraftbedingung statt Sichtlinie.
+   *
+   * Die beiden Seilsegmente ziehen am Kontakt mit den Einheitsvektoren
+   * u_prev und u_next; die Resultante s = u_prev + u_next ist die Kraft, die
+   * das Seil auf die Kante ausübt (Spannungsfaktor kürzt sich). Die Kante
+   * kann nur dagegenhalten, solange die Reaktion N = −s in ihrem Normalen-
+   * kegel liegt, also als nichtnegative Kombination der beiden Flächen-
+   * normalen n1, n2 der an die Kante angrenzenden Flächen darstellbar ist
+   * (reibungsfreie Kante: die Komponente entlang der Kantenrichtung trägt
+   * nichts und wird vorher abprojiziert — das ist genau das analytische
+   * Gleiten entlang der Kante).
+   *
+   * Verlässt −s den Kegel (eine Koordinate wird negativ), drückt das Seil
+   * nicht mehr gegen beide Flächen: es rutscht über die Kante ab und der
+   * Kontakt wird freigegeben — stetig, mit Vorzeichenwechsel, OHNE dass
+   * irgendjemand den Anker sehen muss. Das ist die Regel, die die
+   * Skizzen-Fälle der Sichtlinien-Logik physikalisch korrekt entscheidet:
+   * Ein um eine Säule liegendes Seil drückt weiterhin gegen beide Flächen
+   * seiner Kanten, egal wie frei die Sichtlinie ist.
+   */
+  _pivotRelease(w, prev, next, c) {
+    const e = w.edgeIdx;
+    const sa = CORNER_SIGNS[EDGE_PAIRS[e][0]], sb = CORNER_SIGNS[EDGE_PAIRS[e][1]];
+    let ax = -1;
+    for (let k = 0; k < 3; k++) if (sa[k] !== sb[k]) ax = k;
+    if (ax < 0) return true;
+    const k1 = (ax + 1) % 3, k2 = (ax + 2) % 3;
+    let u1x = prev[0]-c[0], u1y = prev[1]-c[1], u1z = prev[2]-c[2];
+    let u2x = next[0]-c[0], u2y = next[1]-c[1], u2z = next[2]-c[2];
+    const l1 = Math.hypot(u1x,u1y,u1z), l2 = Math.hypot(u2x,u2y,u2z);
+    if (l1 < 1e-6 || l2 < 1e-6) return true;
+    u1x/=l1; u1y/=l1; u1z/=l1; u2x/=l2; u2y/=l2; u2z/=l2;
+    let sx = u1x+u2x, sy = u1y+u2y, sz = u1z+u2z;
+    /* Komponente entlang der Kantenrichtung trägt keine Reaktion
+       (reibungsfreie Kante) — das ist genau das analytische Gleiten. */
+    const se = (ax===0) ? sx : (ax===1) ? sy : sz;
+    if (ax===0) sx -= se; else if (ax===1) sy -= se; else sz -= se;
+    const sLen = Math.hypot(sx,sy,sz);
+    if (sLen < 1e-3) return true;      // Seil läuft gerade durch: kein Knick, kein Kontakt
+    /* Reaktion N = −s muss im Kegel der beiden Flächennormalen liegen:
+       n1 = sa[k1]·e_{k1}, n2 = sa[k2]·e_{k2}. Die Koeffizienten sind damit
+       einfach die negativen s-Komponenten auf diesen beiden Achsen.       */
+    const a1 = -((k1===0?sx : k1===1?sy : sz) * sa[k1]);
+    const a2 = -((k2===0?sx : k2===1?sy : sz) * sa[k2]);
+    const tol = (this.p.pivotHoldTol != null ? this.p.pivotHoldTol : 0.05) * sLen;
+    return !(a1 >= -tol && a2 >= -tol);
+  }
+
+  /**
    * Darf dieser Kontakt überhaupt freigegeben werden?
    *
    * Ja, wenn die Route um seine Box nicht gewickelt ist (Draping, Geradeaus,
@@ -903,7 +1041,9 @@ class RopePathSolver {
            gegen die Fläche gezogen und kann nur über eine Kante abrutschen,
            nie durch bloße Sichtfreiheit verschwinden. Mit der globalen Regel
            glitchte das Seil vollständig durch das Objekt.                    */
-        const unnecessary = !directBlocked && this._releaseTopoOK(w, wrapLen - directLen, i);
+        const unnecessary = (P.wrapSolver === 'pivot' && w.edgeIdx >= 0)
+          ? this._pivotRelease(w, prev, next, cand)
+          : (!directBlocked && this._releaseTopoOK(w, wrapLen - directLen, i));
         /* Physikalische Plausibilitäts-Schranke.
            Eine Umlenkung um eine Box kann niemals wesentlich mehr Seil kosten
            als die Ausdehnung der Box selbst — das Seil liegt an der Kante an und
