@@ -2055,6 +2055,75 @@ console.log('\n═══ 18. Charakter-Physik: Sprung-Integrität mit und ohne S
 }
 
 
+console.log('\n═══ 19. Körper-Kollisionen: Kiste↔Kiste und Spieler↔Kiste ═══');
+{
+  const DT = 1/60;
+  const f19 = (sim, w, input) => {
+    w.stepBodies(DT);
+    if (sim.hook.state !== 'idle') sim.hook.step(DT, sim.rope, sim.player.pos);
+    const chest = sim.player.chestPoint(E.v3());
+    sim.rope.step(DT, chest, (sim.hook.flying || sim.hook.state === 'retract') ? sim.hook.pos : null, sim.player.vel);
+    sim.player.update(DT, input || INPUT_IDLE, sim.rope);
+  };
+  /* 19a: Kiste auf Kiste bleibt liegen statt durchzufallen */
+  {
+    const w = mkWorld();
+    w.addBox([-40,-2,-40],[40,0,40],{color:[1,1,1]});
+    const a = w.addBody({ pos:[0,0.8,0], half:[0.8,0.8,0.8], mass:120, friction:0.4 });
+    const b = w.addBody({ pos:[0.1,3.4,0], half:[0.8,0.8,0.8], mass:120, friction:0.4 });
+    for (let i=0;i<240;i++) w.stepBodies(DT);
+    const auflage = Math.abs(b.min[1] - a.max[1]);
+    ok(auflage < 0.12 && b.pos[1] > a.pos[1], '19a: Kiste landet auf Kiste und bleibt liegen',
+       `Auflage-Abweichung ${auflage.toFixed(3)} m, y oben=${b.pos[1].toFixed(2)} / unten=${a.pos[1].toFixed(2)}`);
+  }
+  /* 19b: Spieler schiebt Kiste, statt durch sie hindurchzulaufen */
+  {
+    const w = mkWorld();
+    w.addBox([-40,-2,-40],[40,0,40],{color:[1,1,1]});
+    const c = w.addBody({ pos:[4,0.8,0], half:[0.8,0.8,0.8], mass:120, friction:0.25 });
+    const s = mkSim(w);
+    s.player.spawn([0,0.86,0], -Math.PI/2);       // Blick +x
+    let deep = 0;
+    for (let i=0;i<180;i++) {
+      f19(s, w, Object.assign({}, INPUT_IDLE, { forward:true }));
+      const ox = Math.min(s.player.pos[0]+0.36, c.max[0]) - Math.max(s.player.pos[0]-0.36, c.min[0]);
+      const oz = Math.min(s.player.pos[2]+0.36, c.max[2]) - Math.max(s.player.pos[2]-0.36, c.min[2]);
+      const oy = Math.min(s.player.pos[1]+0.5, c.max[1]) - Math.max(s.player.pos[1]-0.5, c.min[1]);
+      if (ox > 0 && oy > 0 && oz > 0) deep = Math.max(deep, Math.min(ox, oy, oz));
+    }
+    ok(c.pos[0] > 5.0, '19b: laufender Spieler schiebt die Kiste',
+       `Kiste bei x=${c.pos[0].toFixed(2)} (Start 4.0)`);
+    ok(deep < 0.25, '19b: Spieler dringt nie tief in die Kiste ein',
+       `max. Überlapp ${deep.toFixed(3)} m`);
+  }
+  /* 19c: per Seil in den Spieler gezogene Kiste schiebt ihn beiseite statt
+     durch ihn hindurchzulaufen */
+  {
+    const w = mkWorld();
+    w.addBox([-40,-2,-40],[40,0,40],{color:[1,1,1]});
+    const c = w.addBody({ pos:[-8,0.8,0], half:[0.8,0.8,0.8], mass:15, friction:0.05 });
+    const s = mkSim(w);
+    s.player.spawn([0,0.86,0], Math.PI/2);
+    for (let i=0;i<30;i++) f19(s, w);
+    s.rope.attachAt(c.pos, [1,0,0], c, c, 6.0);   // straff: Zug auf die leichte Kiste
+    s.rope.settleActive = false; s.rope.phase = 3;
+    let deep = 0, pushed = 0;
+    const x0 = s.player.pos[0];
+    for (let i=0;i<300;i++) {
+      f19(s, w);
+      const ox = Math.min(s.player.pos[0]+0.36, c.max[0]) - Math.max(s.player.pos[0]-0.36, c.min[0]);
+      const oz = Math.min(s.player.pos[2]+0.36, c.max[2]) - Math.max(s.player.pos[2]-0.36, c.min[2]);
+      const oy = Math.min(s.player.pos[1]+0.5, c.max[1]) - Math.max(s.player.pos[1]-0.5, c.min[1]);
+      if (ox > 0 && oy > 0 && oz > 0) deep = Math.max(deep, Math.min(ox, oy, oz));
+      pushed = Math.max(pushed, Math.abs(s.player.pos[0]-x0));
+    }
+    ok(c.pos[0] > -2.0, '19c: Seil zieht die Kiste bis zum Spieler',
+       `Kiste bei x=${c.pos[0].toFixed(2)} (Start −8)`);
+    ok(deep < 0.25, '19c: gezogene Kiste läuft nicht durch den Spieler hindurch',
+       `max. Überlapp ${deep.toFixed(3)} m, Spieler ausgewichen um ${pushed.toFixed(2)} m`);
+  }
+}
+
 for (const [st, name, detail] of results) {
   console.log(` ${st==='PASS'?'✔':'✘'} ${name}${detail ? '   ·  ' + detail : ''}`);
 }

@@ -521,6 +521,22 @@ class World {
         pos[0] += nx*depth; pos[1] += ny*depth; pos[2] += nz*depth;
         seg0[0] += nx*depth; seg0[1] += ny*depth; seg0[2] += nz*depth;
         seg1[0] += nx*depth; seg1[1] += ny*depth; seg1[2] += nz*depth;
+        /* Actio = Reactio auf der Körperseite: der Spieler drückt die Kiste
+           um denselben Betrag zurück (Massenanteil 80 kg Spieler) und
+           übergibt seine Auflaufgeschwindigkeit als Impuls. Ohne diesen Term
+           war die Kiste für den Spieler eine unsichtbare Wand und umgekehrt
+           lief eine per Seil gezogene Kiste durch ihn hindurch.            */
+        if (box.dynamic && !box.kinematic && box.invMass > 0) {
+          const invP = 1/80;
+          const sh = depth * (box.invMass / (box.invMass + invP));
+          box.pos[0] -= nx*sh; box.pos[1] -= ny*sh; box.pos[2] -= nz*sh;
+          bodyUpdateAABB(box);
+          const vnn = vel[0]*nx + vel[1]*ny + vel[2]*nz;
+          if (vnn < 0) {
+            const dv = vnn * 80 * box.invMass * 0.9;
+            box.vel[0] += nx*dv; box.vel[1] += ny*dv; box.vel[2] += nz*dv;
+          }
+        }
 
         res.contactCount++;
         if (ny > 0.55) {
@@ -605,6 +621,48 @@ class World {
       bodyUpdateAABB(b);
       b.hasRopeForce = false;
       b.ropeForce[0]=b.ropeForce[1]=b.ropeForce[2]=0;
+    }
+    this._collideBodies();
+  }
+
+  /**
+   * Körper↔Körper-Kollision (AABB-Paare, minimal-invasiv wie _collideBody).
+   * Bisher übersprang die Welt dynamische Körper gegeneinander vollständig —
+   * Kisten fielen ineinander und durch den Spieler hindurch gezogene Kisten
+   * liefen durch alles (Parallel-Befund). Getrennt wird auf der Achse der
+   * geringsten Durchdringung, im Verhältnis der inversen Massen (kinematische
+   * Körper: invMass 0 ⇒ sie schieben, werden aber nicht geschoben), dazu ein
+   * unelastischer Impuls auf der Normalen.
+   */
+  _collideBodies() {
+    const B = this.bodies;
+    for (let i = 0; i < B.length; i++) {
+      const a = B[i];
+      if (!a.dynamic) continue;
+      for (let j = i + 1; j < B.length; j++) {
+        const b = B[j];
+        if (!b.dynamic) continue;
+        const ia = a.kinematic ? 0 : (a.invMass || 0);
+        const ib = b.kinematic ? 0 : (b.invMass || 0);
+        if (ia + ib <= 0) continue;
+        const ox = Math.min(a.max[0]-b.min[0], b.max[0]-a.min[0]);
+        const oy = Math.min(a.max[1]-b.min[1], b.max[1]-a.min[1]);
+        const oz = Math.min(a.max[2]-b.min[2], b.max[2]-a.min[2]);
+        if (ox <= 0 || oy <= 0 || oz <= 0) continue;
+        let ax = 0, dir = 0, pen = 0;
+        if (oy <= ox && oy <= oz)      { ax = 1; pen = oy; dir = (a.pos[1] > b.pos[1]) ? 1 : -1; }
+        else if (ox <= oz)             { ax = 0; pen = ox; dir = (a.pos[0] > b.pos[0]) ? 1 : -1; }
+        else                           { ax = 2; pen = oz; dir = (a.pos[2] > b.pos[2]) ? 1 : -1; }
+        a.pos[ax] += dir * pen * (ia / (ia + ib));
+        b.pos[ax] -= dir * pen * (ib / (ia + ib));
+        bodyUpdateAABB(a); bodyUpdateAABB(b);
+        const rv = (a.vel[ax] - b.vel[ax]) * dir;      // > 0 = auseinander
+        if (rv < 0) {
+          const jimp = -rv / (ia + ib);
+          a.vel[ax] += dir * jimp * ia;
+          b.vel[ax] -= dir * jimp * ib;
+        }
+      }
     }
   }
 
