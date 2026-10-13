@@ -125,9 +125,18 @@ der Nutzer wurde aufgefordert, ihn zu widerrufen. **Kein Token ist im Repo gespe
    fehlgeschlagenen Anker **lautlos alle** vorherigen Schritte (`AssertionError` am Ende, Datei
    unverändert). Besser: indexbasierte Anker (`s.index(...)`) und Kontrolle mit `grep -c` direkt
    danach. In dieser Session ist das dreimal passiert.
-3. **`.git` kann zwischen zwei Nachrichten verschwinden.** Das ist in diesem Projekt inzwischen
-   zweimal passiert (einmal in der Vorsession, einmal in dieser — der Arbeitsbaum lag vollständig
-   da, `.git` nicht). Nichts war verloren, weil alles gepusht war. Wiederherstellung:
+3. **`.git` kann verschwinden, während der Arbeitsbaum liegen bleibt.** Belegt ist das für zwei
+   verschiedene Zeitpunkte, und die beiden sind nicht dasselbe Ereignis:
+     * **Selbst beobachtet (Session 2026-10-13):** zwischen zwei aufeinanderfolgenden Antworten
+       desselben Agenten. Am Ende der einen war `.git` intakt (Push von `00b4aec`, `git ls-remote`
+       ausgeführt), zu Beginn der nächsten lag nur noch der Arbeitsbaum da. Es ging nichts
+       verloren, weil alles gepusht war.
+     * **Aus dem übergebenen Verlauf der Vorsession (Zeile 331), also fremdbeobachtet:**
+       „The .git directory was lost during the session handoff (this has happened before in this
+       project)." Dort half derselbe Ausweg: sauberer Clone von `main`, Zwischenstand in ein
+       `proj_wip/` geschoben. Der Zusatz „schon vorher passiert" ist in keiner der beiden Quellen
+       weiter belegt und wird hier nicht als Tatsache geführt.
+   Gemein ist beiden: Der Arbeitsbaum überlebt, `.git` nicht. Wiederherstellung:
    ```bash
    cd ~ && git clone -q https://github.com/lamachen/Grapple.git proj_new
    cd proj_new && git checkout -b feature/pivot-solver origin/feature/pivot-solver
@@ -135,8 +144,12 @@ der Nutzer wurde aufgefordert, ihn zu widerrufen. **Kein Token ist im Repo gespe
    diff -rq --exclude=.git ~/proj ~/proj_new      # muss leer sein, sonst Arbeitsbaum übernehmen
    cd ~ && mv proj proj_wip && mv proj_new proj
    ```
-   **Lehre:** nach jeder Änderung sofort committen **und** pushen; der lokale Arbeitsbaum ist keine
-   Sicherung. Und vor dem Aufräumen `git status` prüfen, nicht blind drauflos editieren.
+   **Lehre:** nach jeder Änderung sofort committen **und** pushen — der lokale Arbeitsbaum ist
+   keine Sicherung, und ein Clone ist in ~1 s neu gezogen. Außerdem vor jeder Git-Aktion kurz
+   `git rev-parse --git-dir` oder `git status` prüfen statt blind drauflos zu editieren: Ein
+   `git add`/`commit` ohne `.git` meldet nur „not a git repository" und ändert nichts, aber ein
+   Editierskript dazwischen läuft trotzdem und erzeugt einen Arbeitsbaum, dessen Bezug zu HEAD
+   niemand mehr prüfen kann.
 
 ---
 
