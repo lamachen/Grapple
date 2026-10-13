@@ -604,14 +604,12 @@ class World {
       const t = rayAABB(o, d, F[i*6], F[i*6+1], F[i*6+2], F[i*6+3], F[i*6+4], F[i*6+5], bestT);
       if (t >= minT && t < bestT) { bestT = t; best = box; }
     }
-    if (best) {
-      const h = this._hit;
-      h.t = bestT; h.box = best; h.body = null;
-      h.p[0]=o[0]+d[0]*bestT; h.p[1]=o[1]+d[1]*bestT; h.p[2]=o[2]+d[2]*bestT;
-      aabbNormalAt(o, d, bestT, best, h.n);
-      return h;
-    }
-    // dynamische Körper (wenige → direkter Loop)
+    // dynamische Körper (wenige → direkter Loop). Läuft IMMER, mit dem bisher
+    // nächsten statischen Treffer als Obergrenze: ein Körper VOR einer
+    // statischen Box (Kiste vor einer Wand, Kiste auf dem Boden) muss gewinnen.
+    // Früher kehrte die Funktion nach dem ersten statischen Treffer zurück und
+    // sah solche Körper nie — der Pfad-Solver bekam dann die Wand dahinter als
+    // „Blocker" statt der Kiste.
     for (let i = 0; i < this.bodies.length; i++) {
       const b = this.bodies[i];
       if (b === skip || b === skip2) continue;
@@ -620,9 +618,9 @@ class World {
       const t = rayAABB(o, d, b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2], bestT);
       if (t >= minT && t < bestT) { bestT = t; best = b; }
     }
-    if (best && best.dynamic) {
+    if (best) {
       const h = this._hit;
-      h.t = bestT; h.box = best; h.body = best;
+      h.t = bestT; h.box = best; h.body = best.dynamic ? best : null;
       h.p[0]=o[0]+d[0]*bestT; h.p[1]=o[1]+d[1]*bestT; h.p[2]=o[2]+d[2]*bestT;
       aabbNormalAt(o, d, bestT, best, h.n);
       return h;
@@ -2631,6 +2629,7 @@ class Rope {
     this.anchorBox = null;
     this.anchorBody = null;
     this.anchorNormal = v3(0,1,0);
+    this.anchorLocal = v3();   // Ankerpunkt relativ zum Körper (nur wenn anchorBody gesetzt)
     this.farPin = v3();
 
     this.settleActive = false;
@@ -2644,6 +2643,7 @@ class Rope {
 
   reset() {
     this.phase = ROPE_PHASE.IDLE;
+    this.anchorBody = null;
     this.path.reset();
     this.budget = 0; this.budgetEff = 0; this.required = 0; this.slack = 0; this.tension = 0;
     this.retractPos = null;
@@ -2713,7 +2713,14 @@ class Rope {
   attachAt(point, normal, box, body, paidLength) {
     vcopy(this.anchor, point);
     vcopy(this.anchorNormal, normal);
-    this.anchorBox = box; this.anchorBody = body || null;
+    this.anchorBox = box;
+    /* Sitzt der Anker auf einem bewegten Körper (Kiste, Hebebühne, Pendel-Block),
+       wird er body-lokal gespeichert und in step() jedes Mal neu abgeleitet.
+       Vorher blieb er als Weltpunkt stehen: eine gezogene Kiste wanderte weg,
+       das Seilende hing in der Luft (gemessen: Kiste +2,12 m, Anker +0,00 m).
+       Die Körper sind AABBs ohne Rotation, ein reiner Offset genügt. */
+    this.anchorBody = body || ((box && box.dynamic) ? box : null);
+    if (this.anchorBody) vsub(this.anchorLocal, point, this.anchorBody.pos);
     this.budget = clamp(paidLength, this.p.minBudget, this.p.capacity);
     this.path.reset();
     this.phase = ROPE_PHASE.SETTLING;
@@ -2816,6 +2823,9 @@ class Rope {
     vcopy(this.hand, handPos);
 
     if (this.phase === ROPE_PHASE.IDLE) { this.tensionLevel = 0; this.tension = 0; return; }
+
+    // Anker folgt seinem Körper (die Körper wurden in diesem Substep bereits bewegt)
+    if (this.phase !== ROPE_PHASE.FLIGHT && this.anchorBody) vadd(this.anchor, this.anchorBody.pos, this.anchorLocal);
 
     /* ---- 1) Pfad-Topologie -------------------------------------------- */
     if (hookPos) { if (!this.hookPos) this.hookPos = v3(); vcopy(this.hookPos, hookPos); }
@@ -4365,7 +4375,11 @@ class Hook {
       }
       return null;
     }
-    if (this.state === 'stuck') return null;
+    if (this.state === 'stuck') {
+      // Haken sitzt auf einem bewegten Körper → mit dem Anker mitwandern
+      if (rope && rope.anchorBody && rope.attached) vcopy(this.pos, rope.anchor);
+      return null;
+    }
 
     /* ---- ballistischer Flug mit Substeps + Seilzug ---- */
     const g = W.gravity * P.gravityScale;
@@ -5703,6 +5717,10 @@ class Game {
        zwischen Physik (=_hand) und Render (=_ropeOrigin). Je nach Substep-Zahl
        wäre sonst der Snapshot-Slot ein ANDERES Objekt als der Apply-Slot. */
     add(P.pos); add(R.hand); add(this._hand); add(H.pos);
+    /* Anker nur dann interpolieren, wenn er an einem bewegten Körper hängt (er fährt
+       dann mit dessen interpolierter Position mit). Wechselt die Zielliste, mischt
+       _applyInterp in diesem Frame nicht — ein frischer Einhaker verschmiert also nie. */
+    if (R.anchorBody && R.attached) add(R.anchor);
     if (C && C.pos) for (let i = 0; i < C.n; i++) add(C.pos[i]);
     for (const b of this.world.bodies) add(b.pos);
     return t;
