@@ -535,6 +535,23 @@ console.log('\n═══ 9. Rückwirkung: Seil zieht dynamische Kiste ═══'
 }
 
 /* ========================================================================== */
+console.log('\n═══ 9c. raycast sieht Körper vor statischer Geometrie ═══');
+{
+  // Kiste VOR einer Wand muss gewinnen (vorher: Rückgabe nach dem ersten statischen Treffer)
+  const w4 = mkWorld();
+  w4.addBox([20,-2,-20],[22,10,20],{tag:'wall'});
+  const crate4 = w4.addBody({ pos:[0,1,0], half:[0.8,0.8,0.8], mass:120 });
+  const h = w4.raycast([-10,1,0],[1,0,0],60,{});
+  ok(h && h.body === crate4 && Math.abs(h.t-9.2) < 1e-6, 'raycast: Kiste vor der Wand wird getroffen, nicht die Wand dahinter',
+     h ? `t=${h.t.toFixed(2)} ${h.body ? 'Kiste' : 'Wand'}` : 'kein Treffer');
+  const h2 = w4.raycast([30,1,0],[-1,0,0],60,{});
+  ok(h2 && !h2.body && Math.abs(h2.t-8) < 1e-6, 'raycast: Wand vor der Kiste wird weiterhin als Wand gemeldet',
+     h2 ? `t=${h2.t.toFixed(2)} ${h2.body ? 'Kiste' : 'Wand'}` : 'kein Treffer');
+  const h3 = w4.raycast([-10,1,0],[1,0,0],60,{ ropeOnly:true });
+  ok(h3 && h3.body === crate4, 'raycast: ropeOnly findet die Kiste ebenfalls');
+}
+
+/* ========================================================================== */
 console.log('\n═══ 10. Reel-Pumping: Amplitude wächst über Winkelimpuls ═══');
 {
   function swingTest(pumpReel, pumpTorque, seconds = 16) {

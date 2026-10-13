@@ -604,14 +604,12 @@ class World {
       const t = rayAABB(o, d, F[i*6], F[i*6+1], F[i*6+2], F[i*6+3], F[i*6+4], F[i*6+5], bestT);
       if (t >= minT && t < bestT) { bestT = t; best = box; }
     }
-    if (best) {
-      const h = this._hit;
-      h.t = bestT; h.box = best; h.body = null;
-      h.p[0]=o[0]+d[0]*bestT; h.p[1]=o[1]+d[1]*bestT; h.p[2]=o[2]+d[2]*bestT;
-      aabbNormalAt(o, d, bestT, best, h.n);
-      return h;
-    }
-    // dynamische Körper (wenige → direkter Loop)
+    // dynamische Körper (wenige → direkter Loop). Läuft IMMER, mit dem bisher
+    // nächsten statischen Treffer als Obergrenze: ein Körper VOR einer
+    // statischen Box (Kiste vor einer Wand, Kiste auf dem Boden) muss gewinnen.
+    // Früher kehrte die Funktion nach dem ersten statischen Treffer zurück und
+    // sah solche Körper nie — der Pfad-Solver bekam dann die Wand dahinter als
+    // „Blocker" statt der Kiste.
     for (let i = 0; i < this.bodies.length; i++) {
       const b = this.bodies[i];
       if (b === skip || b === skip2) continue;
@@ -620,9 +618,9 @@ class World {
       const t = rayAABB(o, d, b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2], bestT);
       if (t >= minT && t < bestT) { bestT = t; best = b; }
     }
-    if (best && best.dynamic) {
+    if (best) {
       const h = this._hit;
-      h.t = bestT; h.box = best; h.body = best;
+      h.t = bestT; h.box = best; h.body = best.dynamic ? best : null;
       h.p[0]=o[0]+d[0]*bestT; h.p[1]=o[1]+d[1]*bestT; h.p[2]=o[2]+d[2]*bestT;
       aabbNormalAt(o, d, bestT, best, h.n);
       return h;
