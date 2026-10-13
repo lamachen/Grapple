@@ -54,6 +54,11 @@ liest, liest diese — aber **nicht bevor** README „Orientsierung" und `MELDUN
 Das ist Meldung **M2** und der älteste offene Defekt des Projekts: „Ein um ein Objekt gewickeltes
 Seil löst alle Umlenkpunkte und nimmt den direkten Weg."
 
+⚠ **P1 liegt auf dem kritischen Pfad zu einem fest eingeplanten Feature.** IK-Arme und
+gegebenenfalls -Beine sind geplant und nur der Reihenfolge wegen zurückgestellt: nichts davon,
+bevor Seil- und Bewegungsphysik stabil stehen (Vorgabe des Projekteigners, belegt in
+`doc/VORHABEN-mantle.md` §6b). P1 **ist** diese Stabilität.
+
 **Gemessen** (`tools/probe_windoracle.js`, reine Testwelt, Hand auf Kreisbahn um einen Quader):
 Der Umlaufwinkel des Solvers folgt der Handbahn **exakt** — 0,32 → −0,93 → −2,18 → −3,43 → −4,68
 → −5,93 rad über 1,19 Runden, `lengthGeo` wächst korrekt 5,35 → 19,75 m — und fällt dann
@@ -132,6 +137,20 @@ Gemessen und belegt: eine Nick-Animation hat es **nie** gegeben (`vault` kommt i
 ausschließlich in `03_player.js` vor, `dip` wird nur von Landung und Seilzug angestoßen). Was sich
 „schwächer als zu Beginn" anfühlt, ist `gScale *= 0.15` plus fehlendes Kamera-Feedback plus der
 Kontrast zur seit `07603b7` griffigeren übrigen Physik.
+
+**Wichtig für die Einordnung:** IK-Arme/-Beine sind **fest eingeplant** und nur zurückgestellt, bis
+Seil- und Bewegungsphysik stabil stehen — also bis P1/P2 erledigt sind. Die realitätsnahen
+Bewegungsbeschreibungen in `VORHABEN-mantle.md` §2 sind deshalb **keine** Forderung, Gliedmaßen
+heute zu zeichnen, sondern beschreiben, was physikalisch passiert. Daraus folgt der Auftrag an den
+Entwurf: Der Mantle soll **Kontaktdaten produzieren, die IK später abholen kann** (`phase`,
+`contacts[]` mit `limb`/`p`/`n`/`w`, `ledgePoint`, `depth` — §6b), nicht als Kameratrick gebaut
+werden, der später ersetzt wird. Zur Historie: analytische **2-Bone-IK war bereits gebaut und
+funktionierte** (Defekt #20: Kosinussatz plus Pol-Vektor, 9 Blickrichtungen gültig, Pose vor dem
+Seil-Rendering); entfernt wurde der **Platzhalter** daran (Defekt #24: Boxen ohne Tapering,
+Schulterblatt und Handgelenk, beide Arme starr zum Anker). Es fehlt also ein geriggtes Mesh mit
+Clips und IK-Retargeting, nicht der Solver. `drawPlayerBody()` (`07_game.js:770`, sichtbar mit `V`)
+zeichnet bereits Torso, Beine, Kopf und einen Arm — der natürliche Ort, Kontaktpositionen schon vor
+dem Mesh abzunehmen.
 
 `tools/probe_vault.js` ist die Nullmessung dazu (5 Szenarien, deterministisch).
 

@@ -45,7 +45,7 @@ Abhängigkeiten, kein Netzwerk). Entsteht aus `src/*.js` + `tools/template.html`
 | [doc/MELDUNGEN.md](doc/MELDUNGEN.md) | Welche Symptome gemeldet wurden und ihr Status (M1…M9), welche Befunde aus der externen Analyse abgearbeitet sind, was offen hängt, und wie man eine neue Meldung abarbeitet |
 | [doc/ARCHITEKTUR.md](doc/ARCHITEKTUR.md) | ★ **Warum** das System so gebaut ist. 20 Kapitel, Messwerte, bekannte Grenzen mit Defekt-Nummern (#35 … #53), Portierungshinweise |
 | [doc/VERLAUF-PIVOT.md](doc/VERLAUF-PIVOT.md) | Arbeitsstand des laufenden Experiments: Ausgangslage, Glossar, jede Messung mit Zahlen, die verworfenen Wege, die offene Entscheidung |
-| [doc/VORHABEN-mantle.md](doc/VORHABEN-mantle.md) | **Geplant, nicht gebaut.** Spezifikation für Mantle/Vault (Ergebnis folgt aus den Kontaktbedingungen) und den wiederverwendbaren `aimLayer` — mit Ist-Messung, Historie, Abnahmekriterien |
+| [doc/VORHABEN-mantle.md](doc/VORHABEN-mantle.md) | **Geplant, nicht gebaut.** Spezifikation für Mantle/Vault (Ergebnis folgt aus den Kontaktbedingungen) und den wiederverwendbaren `aimLayer` — mit Ist-Messung, Historie, Abnahmekriterien und der **IK-Schnittstelle** (§6b: IK-Arme/-Beine sind fest eingeplant, zurückgestellt bis die Seilphysik stabil ist) |
 
 **Die vier Fallen.**
 
@@ -155,10 +155,15 @@ Parameter stellen kann.
 | `U` | **komplette UI aus/ein** (Screenshot-Modus) |
 | `T` / `H` / `P` | Telemetrie / Steuerung / Parameter einzeln aus- und einblenden |
 
-**Es gibt kein Viewmodel.** Arme/Hände aus Box-Primitiven sind ein Platzhalter, der weder
-qualitativ tragfähig ist noch beim Beurteilen des Seils hilft — er verdeckt nur das
+**Es gibt kein Viewmodel — noch nicht.** Arme/Hände aus Box-Primitiven sind ein Platzhalter,
+der weder qualitativ tragfähig ist noch beim Beurteilen des Seils hilft — er verdeckt nur das
 Testobjekt. Eine ernsthafte Umsetzung braucht ein geriggtes Mesh (glTF) mit Animations-Clips
-und IK-Retargeting; das wird hier bewusst nicht angetäuscht. Das Seil tritt stattdessen an
+und IK-Retargeting; das wird hier bewusst nicht angetäuscht. **IK-Arme und gegebenenfalls
+-Beine sind fest eingeplant** und nur der Reihenfolge wegen zurückgestellt, bis Seil- und
+Bewegungsphysik stabil stehen. Der analytische 2-Bone-Solver war bereits gebaut und
+funktionierte (Defekt #20); entfernt wurde der Platzhalter daran (Defekt #24), nicht die IK —
+siehe `doc/ARCHITEKTUR.md` §20 und `doc/VORHABEN-mantle.md` §6b für die Schnittstelle, die der
+Mantle dafür bereitstellen soll. Das Seil tritt stattdessen an
 einem festen Punkt rechts/unten vor der Kamera aus (nicht bildmittig) und neigt beim
 Einhaken nur leicht mit — der Ursprung bleibt beim Umschauen stabil.
 

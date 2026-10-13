@@ -201,6 +201,79 @@ Pitch — also ein Ducken, kein Nicken), `roll`/`rollVel` (Feder-Dämpfer, wirkt
 
 ---
 
+## 6b. Geplante Reihenfolge: IK ist eingeplant, nicht fraglich
+
+Vorgabe des Projekteigners, im Wortlaut:
+
+> „KI arme und womöglich gar beine, sind ein feature welche fest eingeplant sind, lediglich aber
+> noch nicht an der reihe sind bevor nicht ein stabiles seil/movement physik system existiert."
+
+Und zur Rolle der Bewegungsbeschreibung dieses Entwurfs:
+
+> „ich beschrieb dir realitätsnahe bewegungsabläufe, welche dir erklären sollten was
+> ‚hypothetisch passiert', damit du verstehen kannst was in der animation aus spieler sicht
+> passieren soll."
+
+Die Szenarien in §2 sind also **keine** Forderung, Arme und Beine heute zu zeichnen. Sie sind die
+Beschreibung dessen, was physikalisch geschieht — und daraus folgt die Aufgabe dieses Entwurfs:
+
+### Abhängigkeitskette
+
+```
+stabile Seil-/Bewegungsphysik   →   IK-Arme (und ggf. -Beine)   →   Mantle sichtbar vollständig
+        (HANDOFF §3 P1/P2)            (2-Bone-Solver erprobt,          (Kamera + Gliedmassen
+                                       Mesh/Clips/Retargeting fehlt)    gemeinsam)
+```
+
+Das bedeutet konkret: **P1 in `doc/HANDOFF.md` (der 2π-Windungsverlust) liegt auf dem kritischen
+Pfad zu diesem Feature**, nicht daneben. Er ist die „stabile Seilphysik", die vorausgesetzt wird.
+
+### Auftrag an diesen Entwurf: Kontaktdaten produzieren, die IK später abholen kann
+
+Der Mantle soll **nicht** als Kameratrick gebaut werden, der später durch IK ersetzt wird, sondern
+als Zustandsmaschine, die pro Phase die Kontakte meldet, die ein Rig braucht. Kamera (`dip`, `roll`,
+`aimLayer`) transportiert das Gefühl **bis** IK da ist — und bleibt danach für die Kopforientierung
+zuständig, weil der Kopf nicht an den Armen hängt.
+
+Vorschlag für die Schnittstelle (noch nicht beschlossen, aber der Grund, warum §4 Klassen statt
+einer Stärke definiert):
+
+```js
+mantle = {
+  phase,      // 'approach' | 'impact' | 'hang' | 'push' | 'settle' | 'flow'
+  t,          // 0…1 Fortschritt innerhalb der Phase
+  contacts: [ // was berührt wo, mit welcher Last
+    { limb: 'handL' | 'handR' | 'kneeL' | 'kneeR' | 'footL' | 'footR',
+      p,      // Weltpunkt
+      n,      // Flächennormale
+      w },    // 0…1 Lastanteil
+  ],
+  ledgePoint, // der Kantenpunkt, auf den auch der aimLayer zeigt
+  depth,      // dh bzw. dBody — steuert Hang-Dauer und Kraftbedarf
+}
+```
+
+Damit sind die Klassen aus §4 genau die Information, die ein Retargeting braucht:
+
+| Klasse | Kontakte, die IK später zeichnen würde |
+|---|---|
+| **A** | beide Hände an der Oberkante (Last ~0, reicht nicht), Körper gegen die Wand |
+| **A′** | Hände führen nur, Körper schwingt über die Kante |
+| **B** | `handL`+`handR` kurz auf der Kante, `footR` bereits oben, `kneeL` an der Wandfläche |
+| **C** | `handL`+`handR` auf der Kante, Beine schwingen durch |
+| **D** | beide Hände an der Kante mit vollem Körpergewicht (Hang), dann Drücken |
+| **E** | kein Kontakt, Impakt und Fall |
+
+Zwei Konsequenzen für die Implementation, die sich daraus ergeben:
+
+1. **Phasen und Kontakte müssen auch dann existieren, wenn nichts sie zeichnet.** Sie sind die
+   Schnittstelle; ohne sie müsste IK später rückwärts aus Kameradaten raten.
+2. **`drawPlayerBody()` kann sie sofort sichtbar machen** (Beine und ein Arm werden dort bereits
+   gezeichnet, sichtbar mit `V`). Das ergibt eine Abnahme ohne geriggtes Mesh: Die Kontakte müssen
+   an den richtigen Stellen sitzen, sonst stimmt später das Retargeting nicht.
+
+---
+
 ## 7. Was es zu erhalten gilt
 
 | Baustelle | Warum |
@@ -239,11 +312,26 @@ Jede Zeile wird eine Assertion in `tools/test_sim.js` (neue Sektion) und/oder ei
 
 ## 9. Offene Fragen und Risiken
 
-1. **Kein IK, kein Viewmodel.** `07_game.js` trägt den Kommentar „Kein Viewmodel — bewusste
-   Entscheidung, kein Platzhalter aus Box-Primitiven". Szenario B („ein Bein oben auf der Kante,
-   anderes Knie gegen die Wand") ist ohne IK **nicht sichtbar** — es lässt sich nur über Kamera
-   (`dip`, `roll`, `aimLayer`) und über die Bewegung des Körpers transportieren. Zu klären:
-   reicht das, oder ist ein Viewmodel/IK-Arm eine Voraussetzung?
+1. ~~**Kein IK, kein Viewmodel** — reicht Kamera als Transport?~~ **Gegenstandslos, die Frage war
+   falsch gestellt.** IK-Arme und gegebenenfalls -Beine sind vom Projekteigner **fest eingeplant**
+   und nur **der Reihenfolge wegen zurückgestellt**: nichts davon, bevor Seil- und Bewegungsphysik
+   stabil stehen. Siehe §6b — dort steht jetzt, was das für diesen Entwurf bedeutet.
+   Zur Historie, weil sie im Repo belegt ist und die Planung stützt:
+   * Defekt **#20** (`doc/ARCHITEKTUR.md` §20): analytische **2-Bone-IK war gebaut und funktionierte**
+     — Kosinussatz plus Pol-Vektor für die Gelenkebene, konstante Knochenlängen, Dreiecksungleichung
+     erfüllt, in 9 Blickrichtungen gültig; Hand und Werfer entlang der Unterarmrichtung orientiert,
+     Pose **vor** dem Seil-Rendering berechnet, damit das Seil exakt an der sichtbaren IK-Hand ansetzt.
+   * Defekt **#24**: Entfernt wurde nicht der Solver, sondern der **Platzhalter** daran —
+     unbeschriftete Boxen ohne Tapering, ohne Schulterblatt, ohne Handgelenk, beide Arme starr zum
+     Anker („anatomisch Unsinn"), und sie verdeckten das Testobjekt. Wörtlich: „**Komplett entfernt**
+     statt weiter poliert. Ein tragfähiges Viewmodel braucht ein geriggtes Mesh mit Clips und
+     IK-Retargeting; das wird hier nicht mit Platzhaltern simuliert."
+   * Dasselbe steht heute in `README.md:158` und als Kommentar in `07_game.js:682`.
+   * `02_rope.js:2654` formuliert die Erwartung ausdrücklich: „**Bis ein echter IK-Arm existiert**,
+     ist jede Körper-‚Hand' eine statisch …"
+   * Und es gibt bereits einen Körper zum Ansehen: `drawPlayerBody()` (`07_game.js:770`) zeichnet
+     Torso, **Beine**, Kopf und einen Arm zum Seil — sichtbar in der Orbit-Kamera (`V`). Das ist der
+     natürliche Ort, um Mantle-Kontaktdaten schon **vor** dem geriggten Mesh sichtbar zu machen.
 2. **`dBody` braucht Körperreferenzpunkte.** `feetY` und `eyeY` gibt es; Knie/Hüfte/Brust müssten
    als Anteile von `halfHeight`/`radius` definiert werden. Das ist Konvention, keine Messung —
    die Zahlen müssen einmal festgelegt und dann begründet werden.
@@ -275,6 +363,11 @@ Jede Zeile wird eine Assertion in `tools/test_sim.js` (neue Sektion) und/oder ei
 6. A/A′/E zum Schluss; sie sind vor allem Ausschluss- und Impaktfälle.
 7. Jede Stufe mit den Abnahmekriterien aus §8 messen und den Replay-Fingerabdruck bewusst
    nachziehen.
+
+**Durchgehend, ab Stufe 3:** `mantle`-Phase und `contacts` (§6b) immer mitführen und in
+`drawPlayerBody()` sichtbar machen, auch wenn noch kein geriggtes Mesh existiert. Sie nachträglich
+einzuziehen ist teurer als sie von Anfang an mitlaufen zu lassen — und ohne sie müsste IK später
+rückwärts aus Kameradaten raten.
 
 ---
 
