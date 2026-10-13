@@ -155,7 +155,24 @@ node tools/test_browser.js   # Renderer/Loop/HUD gegen DOM- + WebGL2-Stub
 node tools/test_wrap.js      # Wickeln um Objekte: 4 Invarianten + 4 XFAIL
 node tools/check_panel.js    # zeigt/erreicht jeder der 29 Regler seinen echten Wert?
 node tools/bench.js          # Micro-Benchmarks
+node tools/test_replay.js    # Replay-Determinismus + Fixture-Fingerabdruck
 python3 tools/build.py       # src/*.js → index.html
+
+### Deterministisches Replay (F9)
+
+Jeder Seil-Fehler, der sich im Spiel zeigt, lässt sich als Aufnahme sichern:
+**F9** startet/stoppt die Aufnahme (Status-Snapshot + ein Input-Record pro
+Frame). Der Export landet als `grapple_rec_*.json` im Download-Ordner und
+lässt sich headless frame-genau abspielen:
+
+```bash
+node tools/replay.js aufnahme.json --runs=2     # Bericht + Determinismus
+node tools/replay.js aufnahme.json --write-fingerprint   # Fixture quittieren
+```
+
+`tools/fixtures/demo_orbit.json` ist eine solche Aufnahme im Repo; ihr
+Fingerabdruck ist der Regressionstest R2 — jede Physik-Änderung, die diese
+Trajektorie verschiebt, bricht dort sichtbar.
 ```
 
 ### Bekannter Defekt: Wickeln um Objekte (`tools/test_wrap.js`)

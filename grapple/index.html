@@ -5455,6 +5455,7 @@ class Game {
       if (e.code === 'KeyG') { this.setFreeLook(!this.freeLook); }
       if (e.code === 'F1') { this.debug = !this.debug; e.preventDefault(); }
       if (e.code === 'KeyH') this.togglePanel('help');
+      if (e.code === 'F9') { this.toggleRecording(); e.preventDefault(); }
       if (e.code === 'KeyU') this.togglePanel('all');
       if (e.code === 'KeyT') this.togglePanel('tele');
       if (e.code === 'KeyP') this.togglePanel('tune');
@@ -5588,6 +5589,95 @@ class Game {
     const el = document.getElementById(name);
     if (el) el.classList.toggle('collapsed', !visible);
   }
+  /* ------------------------- Deterministisches Replay ---------------------
+     Aufzeichnung: ein Snapshot des vollständigen Zustands zu Beginn plus ein
+     Input-Record pro Render-Frame (die Physik läuft mit festem 120-Hz-Raster
+     und hängt am Frame-dt des Akkumulators — mit denselben Frames und
+     demselben Input entsteht dieselbe Substep-Folge). Zweck: jede
+     Bildschirmaufnahme eines Seil-Fehls wird zu einem frame-genauen
+     Regressionstest (tools/replay.js), statt dass ein Fehler nachgebaut
+     werden muss (Prozess-Idee aus der Parallel-Analyse).                  */
+  toggleRecording() {
+    if (this.rec) { this.lastRec = { v: 1, snap: this.rec.snap, frames: this.rec.frames }; this.rec = null;
+      this.consoleInfo('Aufnahme beendet: ' + this.lastRec.frames.length + ' Frames');
+      this._downloadRecording();
+      return false; }
+    this.rec = { snap: this.getSnapshot(), frames: [] };
+    this.consoleInfo('Aufnahme läuft (F9 stoppt)');
+    return true;
+  }
+  consoleInfo(m) { if (this.dom && this.dom.hud) {} console.log('[rec] ' + m); }
+  _packFrame(dt) {
+    const i = this.input;
+    return { dt: +dt.toFixed(6), mx: i.mouseX || 0, my: i.mouseY || 0,
+             f: i.forward?1:0, b: i.back?1:0, l: i.left?1:0, r: i.right?1:0,
+             jp: i.jumpPressed?1:0, jh: i.jumpHeld?1:0, sl: i.slide?1:0, sh: i.slideHeld?1:0,
+             fp: i.firePressed?1:0, rp: i.releasePressed?1:0, rd: i.reelDir || 0 };
+  }
+  _unpackFrame(fr) {
+    const i = this.input;
+    i.forward = !!fr.f; i.back = !!fr.b; i.left = !!fr.l; i.right = !!fr.r;
+    i.jumpPressed = !!fr.jp; i.jumpHeld = !!fr.jh; i.slide = !!fr.sl; i.slideHeld = !!fr.sh;
+    i.firePressed = !!fr.fp; i.releasePressed = !!fr.rp; i.reelDir = fr.rd || 0;
+    i.mouseX = fr.mx || 0; i.mouseY = fr.my || 0;
+  }
+  getSnapshot() {
+    const P = this.player, R = this.rope, H = this.hook;
+    const boxSig = (b) => b ? [b.min.map(v=>+v.toFixed(3)), b.max.map(v=>+v.toFixed(3))] : null;
+    return {
+      t: +this.time.toFixed(4),
+      player: { pos: P.pos.slice(), vel: P.vel.slice(), yaw: P.yaw, pitch: P.pitch },
+      rope: { phase: R.phase, budget: R.budget, settleActive: R.settleActive,
+              anchor: R.anchor.slice(), anchorBox: boxSig(R.anchorBox), attached: R.attached },
+      hook: { state: H.state, pos: H.pos.slice(), vel: H.vel.slice() },
+      bodies: this.world.bodies.map(b => ({ sig: boxSig(b), pos: b.pos.slice(), vel: b.vel.slice() })),
+    };
+  }
+  applySnapshot(snap) {
+    const P = this.player, R = this.rope, H = this.hook, W = this.world;
+    const findBySig = (sig) => {
+      if (!sig) return null;
+      const all = W.statics.concat(W.bodies);
+      for (const b of all) {
+        let ok = true;
+        for (let k = 0; k < 3 && ok; k++) {
+          if (Math.abs(b.min[k]-sig[0][k]) > 1e-2 || Math.abs(b.max[k]-sig[1][k]) > 1e-2) ok = false;
+        }
+        if (ok) return b;
+      }
+      return null;
+    };
+    P.pos[0]=snap.player.pos[0]; P.pos[1]=snap.player.pos[1]; P.pos[2]=snap.player.pos[2];
+    P.vel[0]=snap.player.vel[0]; P.vel[1]=snap.player.vel[1]; P.vel[2]=snap.player.vel[2];
+    P.yaw = snap.player.yaw; P.pitch = snap.player.pitch;
+    for (const bd of snap.bodies) {
+      const b = findBySig(bd.sig);
+      if (!b) continue;
+      b.pos[0]=bd.pos[0]; b.pos[1]=bd.pos[1]; b.pos[2]=bd.pos[2];
+      b.vel[0]=bd.vel[0]; b.vel[1]=bd.vel[1]; b.vel[2]=bd.vel[2];
+    }
+    R.detach();
+    H.state = snap.hook.state; H.pos[0]=snap.hook.pos[0]; H.pos[1]=snap.hook.pos[1]; H.pos[2]=snap.hook.pos[2];
+    H.vel[0]=snap.hook.vel[0]; H.vel[1]=snap.hook.vel[1]; H.vel[2]=snap.hook.vel[2];
+    if (snap.rope.phase !== 0) {
+      const box = findBySig(snap.rope.anchorBox);
+      R.attachAt(snap.rope.anchor, [0,1,0], box, (box && box.dynamic) ? box : null, snap.rope.budget);
+      R.settleActive = snap.rope.settleActive;
+      R.phase = snap.rope.phase;
+    }
+    this.time = snap.t || 0;
+  }
+  exportRecording() { return JSON.stringify(this.lastRec || (this.rec ? { v:1, snap:this.rec.snap, frames:this.rec.frames } : null)); }
+  _downloadRecording() {
+    try {
+      const blob = new Blob([this.exportRecording()], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'grapple_rec_' + Date.now() + '.json';
+      a.click();
+    } catch (e) { /* headless: kein DOM-Download, exportRecording() genügt */ }
+  }
+
   togglePanel(name) {
     if (name === 'all') return this.setPanel('all');
     this.setPanel(name, !this.uiVisible[name]);
@@ -5669,6 +5759,7 @@ class Game {
 
   frame(dt) {
     this._frameId = (this._frameId || 0) + 1;
+    if (this.rec) this.rec.frames.push(this._packFrame(dt));
     // Blick
     if ((this.locked || this.dragLook || this.freeLook) && !this.orbit) {
       // Ohne Mauszeiger-Sperre ist der Weg pro Event durch die Fensterbreite
