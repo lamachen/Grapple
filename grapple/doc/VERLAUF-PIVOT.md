@@ -529,8 +529,22 @@ zweimal hintereinander identisch gelaufen.
 
 | | blockiert | maxTiefe | **maxSprung** | maxUmweg | Kontaktwechsel |
 |---|---|---|---|---|---|
-| legacy | 25 (1,30 %) | 1,76 m | **0,053 m** | 14,59 m @ t=6,06 | 11 |
-| pivot | **17 (0,89 %)** | 4,53 m | **6,689 m** | 14,40 m @ t=11,04 | 14 |
+| legacy | 25 (1,30 %) | 1,76 m † | **0,053 m** ‡ | 14,59 m @ t=6,06 | 11 |
+| pivot | **17 (0,89 %)** | 4,53 m | **6,689 m** ‡ | 14,40 m @ t=11,04 | 14 |
+
+> † **Nicht mehr reproduzierbar.** Am selben Tag später zweimal hintereinander neu gemessen:
+> legacy `maxTiefe` = **2,38 m** @ t=6,06 (nicht 1,76 m), pivot unverändert 4,53 m @ t=6,02,
+> Blockaden unverändert 25 bzw. 17. Die Sonde ist deterministisch (zwei Läufe, identische
+> Ausgabe), die 1,76 m stammen aus einem Lauf vor `19e0775`. Ich kann den Unterschied **nicht**
+> erklären — `_pivotCleanup`, der in `a86db17` verloren ging und in `19e0775` wiederhergestellt
+> wurde, läuft nur im pivot-Modus, und die Kommentar-Kürzungen desselben Commits ändern keinen
+> Code-Pfad. Wer diese Zahl braucht, misst sie neu (`MODE=legacy node tools/probe_wrapclean.js`)
+> und trägt ein, was herauskommt. Alle übrigen Zahlen dieses Abschnitts sind zweimal identisch
+> nachgemessen.
+>
+> ‡ **`maxSprung` ist in dieser Tabelle der maskierte Wert** (`S.length` = `lengthGeo + _lenOff`)
+> und damit als Stetigkeitsmaß ungeeignet. Ungefiltert: legacy **14,610 m**, pivot 6,689 m.
+> Siehe §10b.3 — dort ist auch erklärt, warum die Reihenfolge damit umgekehrt ist.
 
 pivot-Zusatzwerte: `selfPen 5`, `releases 6 (3 mit Sprung)`, `pivIns 3`, `legIns 7`.
 legacy-Zusatzwerte: `selfPen 0`, `releases 6 (0 mit Sprung)`, `legIns 27`, `resyncs 0`,
@@ -733,6 +747,43 @@ Sitzungsprotokoll, der Code lag in einem Scratchpad außerhalb des Repos. Die S�
 sind außerdem mit Vorsicht zu lesen: Dort war `toV: 0, toE: 0` — die Feature-Übergänge wurden in
 der Säulenwelt also **nie ausgeübt**; die Fälle, in denen der Fuzz scheiterte (Kantenenden, Ecken),
 sind genau die, die dort nicht vorkamen.
+
+### 10b.6 Nachmessung auf `19e0775` (alle Zahlen zweimal, identisch)
+
+Damit niemand ältere Tabellenwerte weiternutzt: Das ist der Stand nach der Wiederherstellung von
+`_pivotCleanup` und nach dem Umbau von `probe_wrapclean.js` auf `lengthGeo`.
+
+`tools/probe_wrapclean.js` (reine Welt, 1920 Schritte, `V=5 R=4 T=16`):
+
+| | blockiert | maxTiefe | Sprung `length` | **Sprung `lengthGeo`** | max `_lenOff` | maxUmweg |
+|---|---|---|---|---|---|---|
+| legacy | 25 (1,30 %) | 2,38 m @ t=6,06 | 0,053 m | **14,610 m** | **14,58 m** | 14,59 m |
+| pivot | 17 (0,89 %) | 4,53 m @ t=6,02 | 6,689 m | **6,689 m** | 0,00 m | 14,40 m |
+
+`tools/probe_windoracle.js` über **40 s = 8 Runden** (`V=5 R=4 T=40`):
+
+| | größter Winkelsprung | Rebuilds | Kontakt-Verwürfe | max Kontakte | max `_lenOff` |
+|---|---|---|---|---|---|
+| legacy | 6,27 rad @ t=21,13 | **7** | 0 | 3 | **11,40 m** |
+| pivot | 6,27 rad @ t=16,08 | 0 | **17** | 3 | 0,00 m |
+
+`test_sim.js` 20c (1,6 Runden, arretiert als XFAIL):
+
+| Assertion | legacy | pivot | Ziel |
+|---|---|---|---|
+| Wicklung erhalten | 6,27 rad @ t=6,07 (1 Rebuild, max 3 Kontakte) | 3,13 rad @ t=6,03 (3 Verwürfe) | < 0,5 rad |
+| Pfadlänge springt nicht weiter als die Hand läuft | 14,610 m @ t=6,07 | 6,689 m @ t=6,03 | < 0,083 m |
+
+Beide Modi verlieren **dieselbe** Windung, nur über verschiedene Mechanismen: legacy über den
+Sackgassen-Neuaufbau (mit `_lenOff`-Kaschierung), pivot über die Selbst-Durchdringungs-Regel
+(ohne Kaschierung). `max Kontakte = 3` in beiden — das ist die hartkodierte `sameBox >= 3`-Kappe.
+
+### 10b.7 Wohin das geführt hat
+
+Aus diesem Stand ist **`doc/HANDOFF.md`** entstanden: der Einstieg für jemanden, der das Repo ohne
+Chatverlauf übernimmt (neues Modell im App Builder, frische Agent-Session, Mensch nach Pause).
+Dort stehen Erste Amtshandlung, Lesereihenfolge, die fünf Prioritäten mit ihren Zahlen, die
+„nicht anfassen"-Liste, die Werkzeugtabelle, die Arbeitsregeln und die Pages-Bedienung.
 
 ---
 

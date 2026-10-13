@@ -40,8 +40,9 @@ Abhängigkeiten, kein Netzwerk). Entsteht aus `src/*.js` + `tools/template.html`
 
 | Datei | Was sie trägt |
 |---|---|
+| [doc/HANDOFF.md](doc/HANDOFF.md) | ★ **Erster Halt bei Übernahme ohne Vorwissen.** Erste Amtshandlung (drei Minuten), Lesereihenfolge, die fünf Prioritäten mit ihren Messzahlen, „nicht anfassen"-Liste, Werkzeugtabelle, Arbeitsregeln, Pages-Bedienung |
 | `README.md` (diese) | Start, Steuerung, Verifikation, Struktur |
-| [doc/MELDUNGEN.md](doc/MELDUNGEN.md) | ★ **Erster Halt ohne Vorwissen.** Welche Symptome gemeldet wurden und ihr Status, welche Befunde aus der externen Analyse abgearbeitet sind, was offen hängt, und wie man eine neue Meldung abarbeitet |
+| [doc/MELDUNGEN.md](doc/MELDUNGEN.md) | Welche Symptome gemeldet wurden und ihr Status (M1…M9), welche Befunde aus der externen Analyse abgearbeitet sind, was offen hängt, und wie man eine neue Meldung abarbeitet |
 | [doc/ARCHITEKTUR.md](doc/ARCHITEKTUR.md) | ★ **Warum** das System so gebaut ist. 20 Kapitel, Messwerte, bekannte Grenzen mit Defekt-Nummern (#35 … #53), Portierungshinweise |
 | [doc/VERLAUF-PIVOT.md](doc/VERLAUF-PIVOT.md) | Arbeitsstand des laufenden Experiments: Ausgangslage, Glossar, jede Messung mit Zahlen, die verworfenen Wege, die offene Entscheidung |
 
@@ -101,6 +102,22 @@ Handbahn erzwungenen Winkel — das Maß, um das es beim Wickeln geht),
 2. `index.html` im Browser öffnen (Chrome/Edge/Firefox/Safari, WebGL2).
 3. **Klicken** → Mauszeiger wird gesperrt, Audio startet.
 4. `ESC` beendet die Mauszeiger-Sperre.
+
+---
+
+## GitHub Pages — wann gebaut wird und wie man es erreicht
+
+`grapple/index.html` liegt **nicht** im Repo (es enthält `src/*.js` noch einmal, 345 KB); es wird
+beim Push gebaut.
+
+| | |
+|---|---|
+| **Wann** | Bei jedem `push` auf `main`, plus manuell: *Actions → `build-and-pages` → Run workflow*. Feature-Branches bauen **nicht** — veröffentlicht wird exakt der Stand von `main`. |
+| **URL** | `https://lamachen.github.io/Grapple/` → leitet weiter auf `…/Grapple/grapple/index.html`. Die Weiterleitung ist die versionierte `index.html` im **Repo-Wurzelverzeichnis** (nicht zu verwechseln mit dem gebauten Artefakt unter `grapple/`). |
+| **Einmalige Voraussetzung** | *Settings → Pages → Build and deployment → Source* = **„GitHub Actions"**. Steht dort noch „Deploy from a branch", wird das Artefakt nicht ausgeliefert. |
+| **Status prüfen** | Tab *Actions* → `build-and-pages`. Der Build-Schritt protokolliert die Größe: `gebaut: … Bytes`. |
+| **Workflow** | `.github/workflows/pages.yml` — `checkout` → `setup-python 3.11` → `python3 grapple/tools/build.py` (nur Standardbibliothek, kein `pip`) → Artefakt-Prüfung → `configure-pages` → `upload-pages-artifact` (ganzes Repo) → `deploy-pages`. |
+| **Lokal ohne Pages** | `python3 tools/build.py`, dann `grapple/index.html` öffnen. |
 
 ---
 

@@ -10,9 +10,20 @@
 Belege sind Commits (mit `git show <hash>` vollständig lesbar), Testnamen und Dateiverweise.
 Wo ein Beleg fehlt, steht das dabei.
 
-**Reihenfolge zum Einlesen:** diese Datei → [`README.md`](../README.md) (Start, die vier Fallen)
-→ [`doc/ARCHITEKTUR.md`](ARCHITEKTUR.md) (warum das System so gebaut ist)
-→ [`doc/VERLAUF-PIVOT.md`](VERLAUF-PIVOT.md) (Arbeitsstand des laufenden Solver-Experiments).
+**Reihenfolge zum Einlesen:** [`doc/HANDOFF.md`](HANDOFF.md) (Auftrag, Prioritäten, was man nicht
+anfassen darf) → [`README.md`](../README.md) „Orientsierung" (die vier Fallen) → diese Datei
+(Status jeder Meldung) → [`doc/ARCHITEKTUR.md`](ARCHITEKTUR.md) (warum das System so gebaut ist)
+→ [`doc/VERLAUF-PIVOT.md`](VERLAUF-PIVOT.md) (Arbeitsverlauf mit allen Messzahlen).
+
+> **Stand `19e0775`:** Zu M2 gibt es jetzt einen gemessenen Mechanismus und einen arretierten Test
+> (`test_sim.js` 20c, 4 XFAIL). Der Solver verliert **pro Runde exakt 2π** Umlaufwinkel — legacy
+> über den Sackgassen-Neuaufbau, pivot über die Selbst-Durchdringungs-Regel. Die Kappen
+> `wrapMaxCount` und `wrapWindMax` sind nachweislich **nicht** die Ursache; `sameBox >= 3`
+> (hartkodiert) ist notwendig, aber nicht hinreichend. Einzelzahlen: `HANDOFF.md` §3 P1 und
+> `VERLAUF-PIVOT.md` §10b.
+> Ebenfalls zurückgenommen: die Deutung der „V-Schlaufe" als Defekt (sie ist die korrekte Windung
+> nach einer vollen Runde) und „legacy ist bei der Längenstetigkeit besser" (gemessen wurde der
+> durch `_lenOff` maskierte Wert; ungefiltert springt legacy 14,610 m, pivot 6,689 m).
 
 ---
 
