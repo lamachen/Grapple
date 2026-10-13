@@ -185,8 +185,22 @@ Das Spiel liegt als gebautes Artefakt **nicht** im Repo (`.github/workflows/page
 * **URL:** `https://lamachen.github.io/Grapple/` → leitet weiter auf
   `https://lamachen.github.io/Grapple/grapple/index.html` (die Weiterleitung ist die versionierte
   `index.html` im Repo-Wurzelverzeichnis).
-* **Einmalige Voraussetzung:** *Settings → Pages → Build and deployment → Source* muss auf
-  **„GitHub Actions"** stehen.
+* **Einmalige Voraussetzung — IST ERLEDIGT (2026-10-13, 20:18 UTC).**
+  *Settings → Pages → Build and deployment → Source* steht auf **„GitHub Actions"**.
+  Verifikation: `GET /repos/lamachen/Grapple/pages` liefert `build_type: "workflow"`, und
+  `https://lamachen.github.io/Grapple/grapple/index.html` liefert 361 243 Bytes, byte-identisch
+  zum lokal gebauten Artefakt (sha256 gleich), ohne `Jekyll SEO tag`.
+
+  ⚠ **Lehre für die nächste Session:** Diese Einstellung ist **keine** reine UI-Sache. Der
+  PAT des Projekts hat `admin: true` auf dieses Repo, also geht es per API:
+  ```
+  PUT /repos/{owner}/{repo}/pages   {"build_type": "workflow"}   → 204
+  ```
+  (`POST` ist falsch und liefert 409 „already enabled".) Danach einmal
+  `POST /repos/{owner}/{repo}/actions/workflows/pages.yml/dispatches {"ref":"main"}`, damit das
+  Artefakt deployt wird. **Erst nachmessen, ob etwas geht, statt es zu behaupten** — hier war
+  die Auskunft „das musst du im UI klicken" schlicht falsch, und die Live-Demo war dadurch
+  für eine Stunde ein 404.
 * ⚠ **Was passiert, wenn sie nicht gesetzt ist** (am 2026-10-13 real vorgefunden): GitHub baut die
   Seite dann selbst mit Jekyll aus dem Zweiginhalt. Weil `grapple/index.html` nicht mehr versioniert
   ist, erzeugt Jekyll eine HTML-Ansicht der README — **40 KB Jekyll-Seite statt 350 KB Spiel**.
@@ -205,6 +219,7 @@ Das Spiel liegt als gebautes Artefakt **nicht** im Repo (`.github/workflows/page
   | vor `02e5ef6` | `grapple/index.html` versioniert | das Spiel — aber aus dem **letzten Commit, der die Datei enthielt**, nicht aus dem aktuellen `src/` |
   | 19:21, `5d25a77` | Datei nicht versioniert, ohne `.nojekyll` | **HTTP 200, 40 049 Bytes, Jekyll-HTML-Ansicht der README** — kein Spiel |
   | 19:24, `c9b31e5` | dito, **mit** `.nojekyll` | **HTTP 404** — Jekyll unterdrückt, aber die Datei fehlt im Zweig |
+  | **20:18, `66e869d`** | **`build_type: workflow`** (per API gesetzt) | **HTTP 200, 361 243 Bytes — das Spiel**, byte-identisch zum lokalen Build |
 
   Alle drei Zeilen hatten `build-and-pages` **und** `pages build and deployment` auf `success`.
   Die `.nojekyll` hat damit nichts repariert, sondern das Symptom von „falsche Seite" auf
