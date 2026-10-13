@@ -186,10 +186,18 @@ Das Spiel liegt als gebautes Artefakt **nicht** im Repo (`.github/workflows/page
   `https://lamachen.github.io/Grapple/grapple/index.html` (die Weiterleitung ist die versionierte
   `index.html` im Repo-Wurzelverzeichnis).
 * **Einmalige Voraussetzung:** *Settings → Pages → Build and deployment → Source* muss auf
-  **„GitHub Actions"** stehen. Steht dort noch „Deploy from a branch", läuft der Build-Job zwar
-  grün, `deploy` schlägt aber fehl bzw. es wird weiter der alte Zweig ausgeliefert.
-* **Status prüfen:** Tab *Actions* → Workflow `build-and-pages`. Der Build-Job protokolliert die
-  Größe der gebauten Datei (`gebaut: … Bytes`).
+  **„GitHub Actions"** stehen.
+* ⚠ **Was passiert, wenn sie nicht gesetzt ist** (am 2026-10-13 real vorgefunden): GitHub baut die
+  Seite dann selbst mit Jekyll aus dem Zweiginhalt. Weil `grapple/index.html` nicht mehr versioniert
+  ist, erzeugt Jekyll eine HTML-Ansicht der README — **40 KB Jekyll-Seite statt 350 KB Spiel**.
+  Tückisch daran: `build-and-pages` meldet `success` (alle 8 Schritte, inkl. deploy) und parallel
+  läuft ein `pages build and deployment`-Job, der ebenfalls `success` meldet. Grün heißt also
+  **nicht** „das Spiel ist live".
+* **Status prüfen — beides:**
+  1. Tab *Actions* → `build-and-pages` → Build-Schritt protokolliert `gebaut: … Bytes` (~350 KB).
+  2. **Und die URL:** `https://lamachen.github.io/Grapple/grapple/index.html` muss ~350 KB liefern
+     und darf **kein** `Jekyll SEO tag` im `<head>` haben. Die `.nojekyll` im Repo-Wurzel ist die
+     Rückversicherung für den Fall, dass doch Jekyll dazwischenfunken will.
 * **Lokal ohne Pages:** `python3 tools/build.py`, dann `grapple/index.html` öffnen.
 
 ---
