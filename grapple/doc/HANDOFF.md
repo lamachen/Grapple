@@ -196,8 +196,25 @@ Das Spiel liegt als gebautes Artefakt **nicht** im Repo (`.github/workflows/page
 * **Status prüfen — beides:**
   1. Tab *Actions* → `build-and-pages` → Build-Schritt protokolliert `gebaut: … Bytes` (~350 KB).
   2. **Und die URL:** `https://lamachen.github.io/Grapple/grapple/index.html` muss ~350 KB liefern
-     und darf **kein** `Jekyll SEO tag` im `<head>` haben. Die `.nojekyll` im Repo-Wurzel ist die
-     Rückversicherung für den Fall, dass doch Jekyll dazwischenfunken will.
+     und darf **kein** `Jekyll SEO tag` im `<head>` haben.
+
+* **Gemessene Zustandsfolge am 2026-10-13** (Source stand durchgehend auf „Deploy from a branch"):
+
+  | Zeit (UTC) | Stand | Was die URL lieferte |
+  |---|---|---|
+  | vor `02e5ef6` | `grapple/index.html` versioniert | das Spiel — aber aus dem **letzten Commit, der die Datei enthielt**, nicht aus dem aktuellen `src/` |
+  | 19:21, `5d25a77` | Datei nicht versioniert, ohne `.nojekyll` | **HTTP 200, 40 049 Bytes, Jekyll-HTML-Ansicht der README** — kein Spiel |
+  | 19:24, `c9b31e5` | dito, **mit** `.nojekyll` | **HTTP 404** — Jekyll unterdrückt, aber die Datei fehlt im Zweig |
+
+  Alle drei Zeilen hatten `build-and-pages` **und** `pages build and deployment` auf `success`.
+  Die `.nojekyll` hat damit nichts repariert, sondern das Symptom von „falsche Seite" auf
+  „keine Seite" geändert — was die Diagnose bestätigt: Ausgeliefert wird der **Zweiginhalt**,
+  nicht das Artefakt des Workflows. Es gibt genau eine Lösung, und die ist eine Einstellung:
+  **Source = „GitHub Actions"**. Danach deployt `actions/deploy-pages@v4` das Artefakt, in dem die
+  gebaute Datei liegt.
+  Wenn diese Einstellung nicht gesetzt werden soll, muss `grapple/index.html` wieder versioniert
+  werden (`git rm --cached` rückgängig, Eintrag aus `grapple/.gitignore` raus) — dann funktioniert
+  der Branch-Modus wieder,zum Preis von 345 KB Duplikat im Repo und eine Demo, die beim Bauen hinkt.
 * **Lokal ohne Pages:** `python3 tools/build.py`, dann `grapple/index.html` öffnen.
 
 ---
