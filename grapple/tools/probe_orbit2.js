@@ -91,10 +91,32 @@ const hz = 120, dt = 1 / hz;
 const P = Object.assign({}, X.ROPE_DEFAULTS, { wrapSolver: MODE });
 if (process.env.SELFPEN) P.pivotSelfPenRule = process.env.SELFPEN;
 if (process.env.DEPTH) P.pivotSelfPenDepth = +process.env.DEPTH;
+if (process.env.DEADEND) P.pivotDeadEnd = process.env.DEADEND;
+if (process.env.HOP) P.pivotEdgeHop = process.env.HOP === 'on';
 if (process.env.CORNER) P.pivotCornerSlide = process.env.CORNER === 'on';
 const S = new X.RopePathSolver(world, P);
 
 const hand = t => { const a = -t * V / R; return [CX + R * Math.sin(a), 2.5, CZ + R * Math.cos(a)]; };
+
+/* Instrumentierung: Eck-Übergang und _atEnd-Häufigkeit sichtbar machen */
+let csCalls = 0, csHits = 0, atEndSteps = 0, contactSteps = 0, atEndBlocked = 0;
+const origCS = S._cornerSlide.bind(S);
+S._cornerSlide = function (i, prev, next, pb, nb, w) {
+  csCalls++;
+  const n0 = this.wraps.length;
+  const r = origCS(i, prev, next, pb, nb, w);
+  if (this.wraps.length > n0) csHits++;
+  return r;
+};
+const origUW = S._updateWraps.bind(S);
+S._updateWraps = function (d, rev, full) {
+  const r = origUW(d, rev, full);
+  if (full) for (const q of this.wraps) {
+    contactSteps++;
+    if (q._atEnd) { atEndSteps++; if (q.release > 0.001) atEndBlocked++; }
+  }
+  return r;
+};
 
 let A = hand(0);
 S.solve(A, ANCHOR, dt, null, null);
@@ -183,9 +205,11 @@ console.log(JSON.stringify({
   legacyInserts: S.stats.inserts || 0,
   selfPen: S.stats.pivotSelfPen || 0,
   selfPenShallow: S.stats.pivotSelfPenShallow || 0,
+  edgeHops: S.stats.pivotEdgeHops || 0,
   releaseEvents: S.stats.releaseEvents || 0,
   rebuilds: S.stats.rebuilds || 0,
   resyncs: S.stats.resyncs || 0,
+  corner: { calls: csCalls, hits: csHits, contactSteps, atEndSteps, atEndBlocked },
   sweep: {
     calls: S.stats.swCalls || 0, skip: S.stats.swSkip || 0, segs: S.stats.swSegs || 0,
     tests: S.stats.swTests || 0, cross: S.stats.swCross || 0, dup: S.stats.swDup || 0,

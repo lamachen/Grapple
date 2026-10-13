@@ -189,17 +189,25 @@ const ROPE_DEFAULTS = {
   //   legacy: blockiert 3 (0,2 %), maxTiefe 0,37 m, maxSprung 0,07 m, 3 Rebuilds
   //   pivot : blockiert 73 (5,4 %), maxTiefe 5,37 m, maxSprung 2,17 m, 0 Rebuilds
   //           70 von 73 ohne jeden Säulenkontakt, 44 verworfene Kontakte
+  //   (Zusatzmessung: Sackgassen-Neuaufbau im pivot-Modus, pivotDeadEnd
+  //    'rebuild', macht es schlechter statt besser: 15,9 % blockiert,
+  //    165 Kontakt-Verwürfe, dafür maxSprung 0,74 m statt 2,17 m.)
   //   ⇒ Hier ist pivot deutlich schlechter. Diagnose: die Selbst-Durch-
   //     dringungs-Regel wirft Kontakte raus, deren Sehne tief durch die eigene
   //     Box schneidet (Kontakt auf der falschen Seite), und der Insert setzt
   //     dieselbe Kante wieder ein — ein Kreislauf, aus dem nur die im
-  //     pivot-Modus abgeschalteten Pflaster (Sackgassen-Neuaufbau, Resync)
-  //     herauskämen. Regel ganz aus: 22 % blockiert (dann bleibt die falsche
-  //     Wicklung ewig stehen). Offen ist also nicht die Erkennung, sondern die
-  //     KANTENWAHL am Ende eines Gleitvorgangs: ein Kontakt, der ans
-  //     Kantenende läuft, braucht einen Übergang auf die Nachbarkante, der aus
-  //     der Tangentialbedingung kommt — nicht `_cornerSlide` (0 Aufrufe) und
-  //     nicht der Neuaufbau.
+  //     pivot-Modus abgeschalteten Pflaster herauskämen — und der Neuaufbau
+  //     ist messbar schlechter (s. o.). Regel ganz aus: 22 % blockiert (dann
+  //     bleibt die falsche Wicklung ewig stehen).
+  //   Die Ursache ist inzwischen eingegrenzt und steht als Befund-Block bei
+  //     `_segBoxBeyond`: Der Kontakt sitzt auf der senkrechten Kante in
+  //     halber Höhe (Parameter 2,5 von 6 m), beide Kantenenden sind gleich
+  //     weit weg — es gibt dort keine „nächste" Ecke, also auch keinen
+  //     Eckübergang. `_cornerSlide` feuert in beiden Modi 0 Mal, weil
+  //     `_atEnd` in diesen Schritten false ist (1704 bzw. 1561
+  //     Kontakt-Schritte gezählt). Nötig ist ein lokales Neulegen der Route
+  //     um die blockierende Box (oder ECKPUNKTE als eigenständige Kontakte),
+  //     nicht eine weitere Reparatur am Kontakt.
   //
   // STAND v0 (zur Referenz, Messung OHNE Maske — deshalb andere Zahlen):
   // Kraftkegel-Freigabe (_pivotRelease) und Sweep-Insert überstrichener
@@ -218,6 +226,9 @@ const ROPE_DEFAULTS = {
   // horizontale Kanten einbeziehen), dann Pflaster entfernen, wenn W5-W8 grün.
 
   pivotSelfPenRule: 'margin',  // 'margin' = Auflagebereich-Regel, 'off' = aus
+  pivotDeadEnd: 'off',         // Sackgassen-Neuaufbau im pivot-Modus:
+                               //   'off' = aus (Voreinstellung, s. `settled`),
+                               //   'rebuild' = Neuaufbau als letzter Ausweg
   pivotCornerSlide: false,     // Eck-Übergang im pivot-Modus. A/B gemessen:
                                //   ohne Unterschied — im pivot-Modus kommt es
                                //   in 1680 Substeps zu 0 Aufrufen (work/
@@ -679,7 +690,17 @@ class RopePathSolver {
          ist die Kontaktfolge selbst die Topologie; ein Neuaufbau würde sie
          unter Last wechseln (genau der gemeldete Snap), ein Resync würde
          Kontakte gegen eine gedächtnislose Referenz tauschen. Beide aus.   */
-      const settled = !!this._hostSettled && P.wrapSolver !== 'pivot';
+      /* `settled` steuert Sackgassen-Neuaufbau und Drift-Resync. Beide sind
+         im pivot-Modus aus — mit einer Ausnahme, die messbar ist: ohne
+         Neuaufbau bleibt eine Route, deren Kontakt nahe am Kantenende klemmt
+         und deren Zulauf die Box flach schneidet, für immer blockiert, weil
+         (a) der Blocker-Insert für dieselbe Box keine zweite Kante findet
+         (Zulauf-Prüfung `segmentAvoidsBox(prev, cp, box, pad)` schlägt an der
+         Ecke an) und (b) `_cornerSlide` nie feuert (`_atEnd` ist dort false,
+         gemessen 0 Aufrufe in 1704 Kontakt-Schritten, beide Modi).
+         Schalter `pivotDeadEnd`: 'off' (v2-Messung) | 'rebuild'.            */
+      const settled = !!this._hostSettled &&
+        (P.wrapSolver !== 'pivot' || P.pivotDeadEnd === 'rebuild');
       /* Dead-End-Erkennung: blockiert UND kein Release laufend UND kein Insert
          mehr möglich UND die Kontakte BEWEGEN SICH NICHT MEHR. Das letzte
          Kriterium trennt die echte Sackgasse (Kontakte stützen sich gegenseitig,
@@ -1227,6 +1248,48 @@ class RopePathSolver {
     }
   }
 
+  /* ------------------------------------------------------------------------
+     BEFUND (nicht implementiert): warum ein „Kantenwechsel an der Ecke" den
+     pivot-Modus nicht rettet — _pivotEdgeHop, zwei Anläufe, beide verworfen.
+
+     Der Defekt: Ein Kontakt sitzt auf der senkrechten Nordwest-Kante einer Box
+     in halber Höhe (gemessen: Berührpunkt (30,4 | 2,5 | −27,4), Kantenlänge
+     6 m, Parameter 2,5 m). Die Hand läuft nach Westen, die Sehne schneidet
+     die Box immer tiefer (0,28 → 1,93 → 5,14 m), die tiefe Selbst-
+     Durchdringungs-Regel wirft den Kontakt schließlich raus, der Blocker-
+     Insert setzt dieselbe Kante neu — 44 Verwürfe, 70 von 73 blockierten
+     Schritten ohne jeden Säulenkontakt.
+
+     Ansatz 1 — Übergang auf eine Nachbarkante derselben Ecke (wie
+     `_cornerSlide`, aber mit Eckpunkt als zulässigem Ziel, weil die Tangente
+     an eine Nachbarkante von einer Ecke aus per Konstruktion AUF der Ecke
+     liegt, t = 0): scheitert daran, dass die Ecke nicht bestimmbar ist. Der
+     Berührpunkt liegt EXAKT in Kantenmitte, beide Enden sind 2,50 m entfernt;
+     auch der Parameter hilft nicht (t = 2,5 von 6). Die erste Fassung nahm
+     deshalb per Vergleichsoperator immer das erste Ende — die SÜDWEST-Ecke —
+     und beide Kandidaten landeten unter dem Boden (y = −0,1, pointFree ⇒
+     nein) bzw. 1,3 m neben der Ecke (reach ⇒ nein). 0 Hops.
+
+     Ansatz 2 — Eckwahl über den Kantenparameter: identisches Ergebnis, weil
+     der Parameter in Kantenmitte steht. Das ist kein Implementierungsfehler,
+     sondern die Aussage: An einer senkrechten Kante in halber Höhe gibt es
+     keine „nächste" Ecke. Die richtige Route wäre hier ein Umweg ÜBER die
+     obere Ecke und wieder hinunter, also ein zusätzlicher Kontakt auf einer
+     horizontalen Kante — ein lokales Neulegen der Route um diese Box, kein
+     Eckübergang.
+
+     Ebenso gemessen und verworfen: Sackgassen-Neuaufbau im pivot-Modus
+     (`pivotDeadEnd: 'rebuild'`) verschlechtert alles — 5,4 → 15,9 %
+     blockiert, 44 → 165 Kontakt-Verwürfe, weil `converge()` Kontakte liefert,
+     die die pivot-Regeln sofort wieder verwerfen. Der Schalter bleibt für
+     weitere A/B-Versuche stehen, Voreinstellung 'off'.
+
+     Konsequenz für den nächsten Schritt: pivot braucht ein lokales
+     Neulegen der Route um die blockierende Box (im Homotopie-Sinn: kürzeste
+     freie Route mit derselben Kontaktfolge), oder die Kontakt-Modellierung
+     muss ECKPUNKTE als eigenständige Kontakte zulassen. Beides ist größer als
+     eine Reparatur und gehört nicht mehr in diesen Commit.
+     ------------------------------------------------------------------------ */
   /**
    * Läuft die Strecke a→b durch die Box — und wenn ja, wie weit weg vom
    * Punkt `nearT` (Parameter des zugehörigen Kontakts auf dieser Strecke)
@@ -1494,8 +1557,25 @@ class RopePathSolver {
            dieselbe Kante neu — ein Kreislauf. Gemessen (West-Anker-Orbit):
            70 von 73 blockierten Schritten OHNE jeden Säulenkontakt, 44
            verworfene Kontakte, maxSprung 2,17 m.                          */
-        if ((P.wrapSolver !== 'pivot' || P.pivotCornerSlide) &&
-            w.release === 0 && w.edgeIdx >= 0 && w._atEnd)
+        /* Eck-Übergang. Die legacy-Bedingung verlangt `release === 0`
+           („Kontakt wird gebraucht, Hysterese steht still"). Im pivot-Modus
+           ist genau das die falsche Tür: dort ist die Freigabe Kegel UND
+           Sehne, ein an der Klemme stehender Kontakt hat also fast immer
+           release > 0 — und `_cornerSlide` wurde in 1680 Substeps kein
+           einziges Mal aufgerufen (Instrumentierung auf der Methode,
+           tools/probe_orbit2.js). Folge: der Kontakt läuft ans Kantenende,
+           bleibt dort stehen, die Sehne schneidet tief durch die eigene Box,
+           die Selbst-Durchdringungs-Regel wirft ihn raus, der Blocker-Insert
+           setzt dieselbe Kante neu — ein Kreislauf (70 von 73 blockierten
+           Schritten ohne jeden Säulenkontakt).
+           `_cornerSlide` selbst ist kein Pflaster, sondern die tangentiale
+           Bedingung: strikt kürzer + Hysterese, innerhalb cornerSlideReach an
+           der Ecke, Kontakt muss INNEN auf der Nachbarkante landen, und alle
+           drei Strecken (Zulauf, Ablauf, Koexistenz) müssen frei sein. Der
+           alte Kontakt bleibt dabei liegen und löst sich über die normale
+           Freigabe — es springt also nichts.                              */
+        if (w.edgeIdx >= 0 && w._atEnd &&
+            (P.wrapSolver !== 'pivot' ? w.release === 0 : P.pivotCornerSlide))
           this._cornerSlide(i, prev, next, prevBox, nextBox, w);
 
         if (w.release >= 1) { w._dead = true; this.stats.releaseEvents = (this.stats.releaseEvents || 0) + 1; continue; }
