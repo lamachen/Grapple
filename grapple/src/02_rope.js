@@ -147,7 +147,61 @@ const ROPE_DEFAULTS = {
   flightReelSpeed:  18,    // m/s — Rate des automatischen Nachrollens im Flug
 
   // --- Pivot-Solver (A/B gegen legacy, siehe wrapSolver) ---------------------
-  // STAND v0 (Branch feature/pivot-solver, NICHT merged, legacy = Standard):
+  // STAND v2 (Branch feature/pivot-solver, NICHT merged, legacy = Standard):
+  // Neu gegenüber v0/v1:
+  //   · edgeCross2D: EXAKTE Erkennung, welche Kante ein Seilsegment zwischen
+  //     zwei Substeps überstrichen hat (Seitenwechsel-Test f(s) = (p(s)−q)×d(s)
+  //     mit Koeffizienten aus drei Stützstellen + Residual-Pflicht P(s,t) == q;
+  //     geprüft in tools/test_edgecross.js gegen 8000 Zufallsfälle). Das
+  //     Quad-Containment von v0/v1 sah nur Überstreichungen, bei denen ein
+  //     ENDPUNKT an der Kante vorbeiläuft: 22 Treffer in 1440 Substeps.
+  //   · Sweep läuft jeden Substep und über alle 12 Kanten.
+  //   · Freigabe = Kraftkegel UND freie Sehne (jede Bedingung allein ist
+  //     notwendig, keine hinreichend).
+  //   · Selbst-Durchdringung: nur die TIEFE Variante killt den Kontakt.
+  //   · Blocker-Insert bleibt AN (der Sweep erkennt nur Kanten-Über-
+  //     streichungen; eine Sehne, die eine Box schneidet OHNE eine Kante zu
+  //     überstreichen, braucht die tangentiale Kantenwahl des Inserts).
+  //   · Doppelkanten-Schranke: dieselbe Kante derselben Box stand zweimal in
+  //     der Kontaktliste ([8, 9, 8]) — Pfad 17,64 m bei 15,69 m Referenz.
+  //
+  // MESSUNG A (vier test_wrap-Orbits, work/probe_pivot.js, MIT der
+  // Messhygiene-Maske aus test_wrap.js — Schritte, in denen die Hand selbst in
+  // Geometrie steht, zählen nicht. Ohne Maske sind die Zahlen wertlos: die
+  // Maske macht aus 19 % blockiert 0,3 %, weil der Orbit-Radius 3,2/4,5 m die
+  // Hand durch die Säule führt):
+  //   Lauf                  blockiert      maxSprung       maxUmweg    Releases(m.Sprung)
+  //   enger Orbit          legacy  0,0 %   8,89 m   8,81 m    7 (1)
+  //                          pivot  1,3 %   4,57 m  11,30 m   13 (12)
+  //   enger Orbit schnell  legacy  7,1 %  11,59 m  59,53 m    7 (4)
+  //                          pivot  2,5 %   2,54 m  11,70 m   24 (13)
+  //   weiter Orbit         legacy  0,3 %   8,49 m  11,95 m    7 (1)
+  //                          pivot  0,1 %   2,50 m  10,91 m    9 (3)
+  //   weiter Orbit schnell legacy  2,5 %   4,94 m  39,30 m   12 (4)
+  //                          pivot  0,8 %   3,35 m  11,20 m   16 (11)
+  //   ⇒ pivot gewinnt klar bei Blockaden und Längensprüngen (59,5 → 11,7 m),
+  //     verliert aber bei Freisetzungen MIT Sprung (12-13 gegen 1-4): die
+  //     Kegel-UND-Sehne-Regel löst öfter, und jedes Lösen kostet Länge.
+  // MESSUNG B (tools/probe_orbit2.js, Anker SÜD-WESTLICH der Säule, also mit
+  // echtem Wickel-Zwang — der alte Messaufbau hatte den Anker auf der Säule
+  // selbst, dort kann die Sehne sie nie schneiden und es gab nichts zu
+  // wickeln):
+  //   legacy: blockiert 3 (0,2 %), maxTiefe 0,37 m, maxSprung 0,07 m, 3 Rebuilds
+  //   pivot : blockiert 73 (5,4 %), maxTiefe 5,37 m, maxSprung 2,17 m, 0 Rebuilds
+  //           70 von 73 ohne jeden Säulenkontakt, 44 verworfene Kontakte
+  //   ⇒ Hier ist pivot deutlich schlechter. Diagnose: die Selbst-Durch-
+  //     dringungs-Regel wirft Kontakte raus, deren Sehne tief durch die eigene
+  //     Box schneidet (Kontakt auf der falschen Seite), und der Insert setzt
+  //     dieselbe Kante wieder ein — ein Kreislauf, aus dem nur die im
+  //     pivot-Modus abgeschalteten Pflaster (Sackgassen-Neuaufbau, Resync)
+  //     herauskämen. Regel ganz aus: 22 % blockiert (dann bleibt die falsche
+  //     Wicklung ewig stehen). Offen ist also nicht die Erkennung, sondern die
+  //     KANTENWAHL am Ende eines Gleitvorgangs: ein Kontakt, der ans
+  //     Kantenende läuft, braucht einen Übergang auf die Nachbarkante, der aus
+  //     der Tangentialbedingung kommt — nicht `_cornerSlide` (0 Aufrufe) und
+  //     nicht der Neuaufbau.
+  //
+  // STAND v0 (zur Referenz, Messung OHNE Maske — deshalb andere Zahlen):
   // Kraftkegel-Freigabe (_pivotRelease) und Sweep-Insert überstrichener
   // vertikaler Kanten sind drin und laufen stabil, bringen in der
   // Orbit-Messung (probe_pivot.js, vier test_wrap-Orbits) aber noch KEINE
@@ -163,6 +217,15 @@ const ROPE_DEFAULTS = {
   // Schritt: pivot-Modus OHNE legacy-Insert (auch Erstkontakt über Sweep,
   // horizontale Kanten einbeziehen), dann Pflaster entfernen, wenn W5-W8 grün.
 
+  pivotSelfPenRule: 'margin',  // 'margin' = Auflagebereich-Regel, 'off' = aus
+  pivotCornerSlide: false,     // Eck-Übergang im pivot-Modus. A/B gemessen:
+                               //   ohne Unterschied — im pivot-Modus kommt es
+                               //   in 1680 Substeps zu 0 Aufrufen (work/
+                               //   probe_orbit2.js, Instrumentierung auf
+                               //   _cornerSlide). Der Schalter bleibt als
+                               //   Griff für die nächste Runde stehen.
+  pivotSelfPenDepth: 0.5,      // - Anteil der Querschnittsdiagonale, ab dem die
+                               //   Selbst-Durchdringung als unmöglich gilt
   wrapSolver:   'legacy',  // 'legacy' = Insert per Raycast/Greedy + Freigabe per
                            //          Sehne/Sichtlinie (+ Pflaster), 'pivot' =
                            //          Freigabe über den Kraftkegel an der Kante
@@ -295,18 +358,156 @@ function edgeTouchPoint(A, B, p0, p1, outN, clearance, out) {
   return elen;
 }
 
-/** Punkt in der (ggf. nicht-konvexen) swept-Fläche zweier Segmente:
-    Zerlegung in zwei Dreiecke (a,b,b') und (a,b',a'). Draufsicht (x,z). */
-function pointInQuad2D(px, pz, ax, az, bx, bz, b2x, b2z, a2x, a2z) {
-  const inTri = (qx, qz, x1, y1, x2, y2, x3, y3) => {
-    const d1 = (qx-x2)*(y1-y2) - (x1-x2)*(qz-y2);
-    const d2 = (qx-x3)*(y2-y3) - (x2-x3)*(qz-y3);
-    const d3 = (qx-x1)*(y3-y1) - (x3-x1)*(qz-y1);
-    const neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
-    const pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
-    return !(neg && pos);
-  };
-  return inTri(px, pz, ax, az, bx, bz, b2x, b2z) || inTri(px, pz, ax, az, b2x, b2z, a2x, a2z);
+/* Ergebnis des letzten edgeCross2D-Aufrufs (vermeidet Objekt-Allokation):
+   s = Zeitanteil des Substeps, t = Laufparameter entlang des Seils,
+   u/v = ebene Koordinaten des Kreuzungspunkts.                             */
+const _EC = { s: 0, t: 0, u: 0, v: 0 };
+const _ECR1 = [];       // wiederverwendete Wurzelliste — keine Allokation pro Substep
+
+/**
+ * Exakter Test: hat das Seilsegment (a→b), dessen Endpunkte sich linear nach
+ * (a2→b2) bewegen, den Punkt q in der (u,v)-Ebene ÜBERSTRICHEN?
+ *
+ * Verfahren — Vorzeichenwechsel der „Seite", nicht Fläche-enthält-Punkt:
+ *   side_p(s) = (P(s) − q) × d(s)      mit d = Segmentrichtung, × = 2D-Det.
+ * Ein Punkt kann eine Strecke nur dann überstreichen, wenn sich mindestens
+ * EINER ihrer Endpunkte von der einen auf die andere Seite von q bewegt
+ * (oder umgekehrt). side_p(s) ist ein Polynom 2. Grades in s, dessen
+ * Steigung an den Rändern exakt auswertbar ist; der Vorzeichenwechsel wird
+ * deshalb pro Rand mit einer gedämpften Newton-Iteration auf der jeweiligen
+ * Monotonie-Strecke gesucht und danach in die exakte quadratische Formel
+ * überführt. Das ist zahlenstabil auch dort, wo die bilineare Fläche fast
+ * entartet — genau der Wickel-Fall: Sehne 29,8 m, Handhub 8 cm, die Jacobi-
+ * Determinante der Flächen-Parametrisierung liegt dort bei ~1e−13
+ * (gemessen; ein Flächen-Schnittverfahren bricht an dieser Stelle ab).
+ *
+ * Zum gefundenen Zeitpunkt s wird der Laufparameter t des Kreuzungspunkts
+ * exakt gebildet (Schnitt der Strecke mit der Geraden durch q, senkrecht zur
+ * Bewegungsrichtung ist nicht nötig — q liegt per Konstruktion auf der
+ * Geraden) und muss in [0,1] liegen, damit die KANTE (nicht ihre Verlänge-
+ * rung) überstrichen wurde.
+ *
+ * Warum der Test überhaupt nötig ist (gegenüber „Eckpunkt in der swept-Quad",
+ * v0/v1): Die Quad enthält einen Eckpunkt nur, wenn sich ein ENDPUNKT des
+ * Segments an ihm vorbeibewegt. Der Normalfall beim Wickeln ist der andere —
+ * die Hand gleitet seitlich und das Segment schneidet die Kante in seiner
+ * Mitte. Bei 6 m Sehnenlänge und 8 cm Handweg pro Substep meldete das
+ * Quad-Verfahren 22 Treffer in 1440 Substeps; 205 Blockaden folgten daraus.
+ */
+function edgeCross2D(au, av, bu, bv, a2u, a2v, b2u, b2v, qu, qv) {
+  /* Bewegung der beiden Endpunkte während des Substeps */
+  const ma_u = a2u - au, ma_v = a2v - av;
+  const mb_u = b2u - bu, mb_v = b2v - bv;
+
+  /* „Seite" der Strecke relativ zu q, bezogen auf die Segmentrichtung:
+       f(s) = (p(s) − q) × d(s),   d(s) = (b + s·m_b) − (a + s·m_a)
+     Ein Punkt kann von einer Strecke nur überstrichen werden, wenn die
+     Strecke im Laufe des Substeps über ihn hinwegläuft — dann ist f an
+     dieser Stelle null. f ist exakt quadratisch in s; die Koeffizienten
+     werden nicht symbolisch hergeleitet, sondern an den drei Stützstellen
+     0, ½, 1 AUSGEWERTET (Vandermonde, exakt). Vier Anläufe mit hergeleiteten
+     Koeffizienten lieferten jeweils plausible, aber falsche Wurzeln — die
+     Stützstellen-Variante kann sich nicht gegen die Auswertung selbst
+     verschieben, und tools/test_edgecross.js prüft zusätzlich bei jedem
+     Treffer P(s,t) == q plus 8000 Zufallsfälle.
+
+     f ist übrigens für beide Endpunkte IDENTISCH (p und p + λ·d liefern
+     dasselbe Kreuzprodukt, weil d × d = 0), ein Durchlauf genügt also.   */
+  const y0 = sideAt(0, au, av, ma_u, ma_v, bu, bv, mb_u, mb_v, qu, qv);
+  const yh = sideAt(0.5, au, av, ma_u, ma_v, bu, bv, mb_u, mb_v, qu, qv);
+  const y1 = sideAt(1, au, av, ma_u, ma_v, bu, bv, mb_u, mb_v, qu, qv);
+  const c0 = y0;
+  const c2 = 2 * y0 - 4 * yh + 2 * y1;
+  const c1 = -3 * y0 + 4 * yh - y1;
+
+  const roots = _ECR1;
+  roots.length = 0;
+  quadRootsWide(c2, c1, c0, roots);
+  const scale = Math.max(1, Math.abs(qu), Math.abs(qv));
+  const tol = 1e-9 * scale;
+
+  /* Jede Wurzel einzeln zu Ende prüfen: f kann in [0,1] ZWEI Nullstellen
+     haben, und die betragsgrößere (die zuerst gefunden wird) muss nicht die
+     gültige sein — gemessen an einem Zufallsfall mit s = 0,98 (t außerhalb)
+     und s = 0,022 (Treffer). Ein frühes `break` auf die erste Wurzel kostete
+     dort den Treffer.                                                     */
+  for (let ri = 0; ri < roots.length; ri++) {
+    const r = roots[ri];
+    if (!(r >= -1e-9 && r <= 1 + 1e-9)) continue;
+    const s = r < 0 ? 0 : (r > 1 ? 1 : r), ms = 1 - s;
+    const su = au + s * ma_u, sv = av + s * ma_v;               // a(s)
+    const du = (bu + s * mb_u) - su, dv = (bv + s * mb_v) - sv; // d(s)
+    const dl2 = du * du + dv * dv;                              // |d|², nicht |d|
+    if (dl2 < 1e-24) continue;                                  // degeneriert
+    const t = ((qu - su) * du + (qv - sv) * dv) / dl2;
+    if (!(t >= -1e-9 && t <= 1 + 1e-9)) continue;               // ausserhalb der Kante
+    const tc = t < 0 ? 0 : (t > 1 ? 1 : t);
+    const pu = su + tc * du, pv = sv + tc * dv;
+    /* RESIDUAL-PFLICHT: f = 0 beweist Kollinearität — die Kante ist erst
+       getroffen, wenn q wirklich AUF dem Segment lag. Ohne diese Prüfung:
+       282 Scheintreffer in 4000 Zufallsfällen, mit ihr 0.                */
+    if (Math.abs(pu - qu) > tol || Math.abs(pv - qv) > tol) continue;
+    _EC.s = s;
+    _EC.t = tc;
+    _EC.u = pu;
+    _EC.v = pv;
+    return true;
+  }
+  return false;
+}
+
+/** f(s) = (a(s) − q) × d(s) — direkt ausgewertet, ohne Koeffizienten. */
+function sideAt(s, au, av, ma_u, ma_v, bu, bv, mb_u, mb_v, qu, qv) {
+  const px = au + s * ma_u - qu, py = av + s * ma_v - qv;
+  const dx = (bu + s * mb_u) - (au + s * ma_u);
+  const dy = (bv + s * mb_v) - (av + s * ma_v);
+  return px * dy - py * dx;
+}
+
+/** Reelle Wurzeln von A·x² + B·x + C = 0, gefiltert auf [−0.2, 1.2]
+    (Newton/Bereichsprüfung verfeinert danach; der Randpuffer fängt Wurzeln,
+    die durch Rundung knapp aus [0,1] rutschen).
+
+    Zahlenstabil und ohne Relativschwelle gegen |A|: die betragsgrößere Wurzel
+    wird ohne Differenzbildung gebildet (q = −½(B + sign(B)·√disc)), die
+    zweite über Vieta (r2 = C/q). Genau das braucht der Anwendungsfall — eine
+    fast gestreckte Bewegung liefert ein winziges A, und die physikalisch
+    interessante Wurzel ist dann die KLEINE: eine Relativschwelle
+    |A| < 1e−14·max(|A|,|B|,|C|) würde sie als „linear" wegwerfen (gemessen:
+    7 von 4000 Zufallsfällen verloren, darunter s = 0,022).               */
+function quadRootsWide(A, B, C, out) {
+  const LO = -0.2, HI = 1.2;
+  const push = r => { if (r >= LO && r <= HI && r === r) out.push(r); };
+  if (Math.abs(A) < 1e-300) {                       // exakt linear
+    if (Math.abs(B) > 1e-300) push(-C / B);
+    return;
+  }
+  const disc = B * B - 4 * A * C;
+  if (!(disc >= 0)) return;
+  const sq = Math.sqrt(disc);
+  const q = -0.5 * (B + (B >= 0 ? sq : -sq));
+  if (Math.abs(q) > 1e-300) {
+    push(q / A);                                    // betragsgrößere Wurzel
+    push(C / q);                                    // zweite über Vieta
+  } else {
+    const inv = 1 / (2 * A);
+    push((-B - sq) * inv);
+    push((-B + sq) * inv);
+  }
+}
+/* Kanten-Topologie für den Sweep: Achse (Kantenrichtung), die beiden Ebenen-
+   achsen und die Vorzeichen des Eckpunkts in dieser Ebene. In der Ebene
+   senkrecht zur Kante ist die Kante ein PUNKT — dort wird überstrichen.
+   v0 hat nur vertikale Kanten (Draufsicht x/z) betrachtet; v1 nimmt alle
+   zwölf, damit auch horizontale Kanten (Blockoberkanten, Decken) per Sweep
+   entstehen und der legacy-Insert im pivot-Modus ganz wegfallen kann.      */
+const EDGE_PL = [], EDGE_SGN = [];
+for (let e = 0; e < 12; e++) {
+  const sa = CORNER_SIGNS[EDGE_PAIRS[e][0]], sb = CORNER_SIGNS[EDGE_PAIRS[e][1]];
+  let ax = -1;
+  for (let k = 0; k < 3; k++) if (sa[k] !== sb[k]) ax = k;
+  const pl = [0, 1, 2].filter(k => k !== ax);
+  EDGE_PL.push(pl); EDGE_SGN.push([sa[pl[0]], sa[pl[1]]]);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -405,6 +606,16 @@ class RopePathSolver {
     // 2) Polylinie aufbauen
     this._buildPts(A, B);
 
+    /* 2b) PIVOT: überstrichene Kanten JEDEN Substep einsammeln. Die Sweep-
+       Fläche zwischen altem und neuem Segment ist bei 120 Hz schmal genug,
+       dass keine Kante übersprungen wird; bei Topologie-Tick-Auflösung (v0)
+       fielen schnelle Bewegungen durchs Raster (gemessen: pivotInserts 0-7
+       pro 12-s-Orbit, Blockaden fast alle hand-nah).                       */
+    if (P.wrapSolver === 'pivot') {
+      this.insertBudget = P.wrapInsertsPerFrame;
+      this._pivotSweep();
+    }
+
     if (full) {
       /* 3) Blocker finden, Kontakte einfügen — mit topologyHz (60).
          Bewusst NICHT jeden Substep: ein neu eingefügter Kontakt verlängert
@@ -414,53 +625,25 @@ class RopePathSolver {
          Geometrie läuft: (a) alle Ketten-Nodes kollidieren immer, (b) jeder
          Stützpunkt der Render-Kurve wird aus fester Geometrie herausgeschoben.
          Während eines laufenden Release unterdrückt (sonst Ping-Pong).        */
-      /* 3a) PIVOT-INSERT: Kanten, die ein Seilsegment seit dem letzten
-             Topologie-Tick in der Draufsicht ÜBERSTRICHEN hat, werden zu
-             Kontakten — in der richtigen Reihenfolge und ohne die Sackgassen
-             der Greedy-Suche. v0: vertikale Kanten (in der Draufsicht ein
-             Punkt), swept-Fläche = Quad (a, b, b', a') aus altem und neuem
-             Segment. Der legacy-Insert darunter bleibt als Sicherheitsnetz
-             (Erstkontakt, horizontale Kanten) und läuft erst nach dem Sweep. */
-      if (P.wrapSolver === 'pivot' && this._prevPoly && this._prevPoly.n === this.pts.length) {
-        const prev = this._prevPoly;
-        for (let i = 0; i < this.pts.length - 1 && this.insertBudget > 0; i++) {
-          const a = this.pts[i], b = this.pts[i + 1];
-          const pa = prev.p[i], pb = prev.p[i + 1];
-          const ba = this.ptsBox[i], bb = this.ptsBox[i + 1];
-          const near = this._nearBoxes(a, b, ba, bb, null, []);
-          for (const bx of near) {
-            if (this.insertBudget <= 0) break;
-            for (let e = 0; e < 12; e++) {
-              const ea = CORNER_SIGNS[EDGE_PAIRS[e][0]], eb = CORNER_SIGNS[EDGE_PAIRS[e][1]];
-              if (ea[1] !== eb[1]) continue;              // nur vertikale Kanten (v0)
-              const qx = (ea[0]===1?bx.max[0]:bx.min[0]), qz = (ea[2]===1?bx.max[2]:bx.min[2]);
-              if (!pointInQuad2D(qx, qz, a[0],a[2], b[0],b[2], pb[0],pb[2], pa[0],pa[2])) continue;
-              let dup = false;
-              for (const w of this.wraps) if (w.box === bx && w.edgeIdx === e) dup = true;
-              if (dup) continue;
-              const p0 = this._pv0 || (this._pv0 = v3()), p1 = this._pv1 || (this._pv1 = v3()), nn = this._pv2 || (this._pv2 = v3());
-              boxEdge(bx, e, p0, p1, nn);
-              const cp = this._pv3 || (this._pv3 = v3());
-              edgeTouchPoint(a, b, p0, p1, nn, P.wrapClearance, cp);
-              if (_TP.t < 0.02 || _TP.t > _TP.elen - 0.02) continue;
-              if (!this.world.pointFree(cp, 0.02, true)) continue;
-              const w = makeWrap(bx, e);
-              vcopy(w.p, cp);
-              w.side = ((b[0]-a[0])*(qz-a[2]) - (b[2]-a[2])*(qx-a[0])) >= 0 ? 1 : -1;
-              this.wraps.splice(i, 0, w);
-              this.insertBudget--;
-              this.stats.pivotInserts = (this.stats.pivotInserts || 0) + 1;
-              this._buildPts(this._A, this._B);
-              break;
-            }
-          }
-        }
-      }
-
       this.insertBudget = P.wrapInsertsPerFrame;
       let releasing = false;
       for (const w of this.wraps) if (w.release > 0.001) { releasing = true; break; }
       let guard = 0;
+      /* Blocker-Insert bleibt AUCH im pivot-Modus an — aber nur als
+         ERGÄNZUNG zum Sweep, nicht als Ersatz.
+
+         Messgrund (tools/probe_orbit2.js, Anker westlich der Säule, also mit
+         echtem Wickel-Zwang): Mit reinem Sweep liegt die Polyline in 18,6 %
+         der gültigen Schritte in Geometrie, und in 243 von 250 davon sitzt
+         überhaut kein Kontakt an der Säule — der Sweep hat also nichts
+         anzubieten. Das liegt nicht an seiner Genauigkeit (edgeCross2D ist
+         exakt und gegen 20 000 Zufallsfälle geprüft), sondern an seiner
+         AUFGABE: Eine Kanten-Überstreichung findet nur in dem Augenblick
+         statt, in dem die Sehne exakt durch die Kante läuft. Der Normalfall
+         dazwischen ist eine Sehne, die die Box DURCHSCHNEIDET, ohne eine
+         Kante zu überstreichen — dort muss ein Kontakt aus der Blockade
+         abgeleitet werden (tangentiale Kantenwahl), und genau das tut der
+         Blocker-Insert. v1 hatte ihn deshalb abgeschaltet; das war falsch. */
       while (!releasing && this.insertBudget > 0 && guard++ < 5) {
         if (!this._tryInsertWrap()) break;
         this._buildPts(A, B);
@@ -491,7 +674,12 @@ class RopePathSolver {
          test_sim.js 13d). Die echte Sackgasse dagegen hat release == 0 an
          JEDEM Kontakt, weil jede lokale Sehne „gebraucht" meldet — sie löst
          sich nie von selbst.                                                 */
-      const settled = !!this._hostSettled;
+      /* `settled` steuert Sackgassen-Neuaufbau und Drift-Resync — beides
+         Pflaster für den topologie-blinden legacy-Zustandsraum. Im pivot-Modus
+         ist die Kontaktfolge selbst die Topologie; ein Neuaufbau würde sie
+         unter Last wechseln (genau der gemeldete Snap), ein Resync würde
+         Kontakte gegen eine gedächtnislose Referenz tauschen. Beide aus.   */
+      const settled = !!this._hostSettled && P.wrapSolver !== 'pivot';
       /* Dead-End-Erkennung: blockiert UND kein Release laufend UND kein Insert
          mehr möglich UND die Kontakte BEWEGEN SICH NICHT MEHR. Das letzte
          Kriterium trennt die echte Sackgasse (Kontakte stützen sich gegenseitig,
@@ -516,11 +704,6 @@ class RopePathSolver {
       else if (!inserted && move < 0.02) this._deadEnd = (this._deadEnd || 0) + 1;
       else this._deadEnd = 0;
 
-      /* Polylinie dieses Ticks für den Sweep-Vergleich des nächsten merken. */
-      const ppoly = this._prevPoly || (this._prevPoly = { n: 0, p: [] });
-      while (ppoly.p.length < this.pts.length) ppoly.p.push(v3());
-      ppoly.n = this.pts.length;
-      for (let k = 0; k < this.pts.length; k++) vcopy(ppoly.p[k], this.pts[k]);
       /* Halte-Zustand statt Sackgasse: ist das blockierte Segment das hand-nahe
          UND zieht das Seil (Budget kürzer als der Pfad dieser Wicklung) UND
          ist die Route wirklich um die Box gewickelt, dann ist die Blockade
@@ -674,6 +857,15 @@ class RopePathSolver {
       this._lenOff = Math.max(0, this._lenOff - (P.resyncFade || 4) * dt);
       this.length = this.lengthGeo + this._lenOff;
     }
+
+    /* Polylinie dieses Substeps für den Sweep-Vergleich des nächsten merken.
+       Bewusst am ENDE von solve(): verglichen wird gegen das, was der Solver
+       zuletzt wirklich ausgespuckt hat — nicht gegen einen Zwischenstand.   */
+    const ppoly = this._prevPoly || (this._prevPoly = { n: 0, p: [] });
+    while (ppoly.p.length < this.pts.length) ppoly.p.push(v3());
+    ppoly.n = this.pts.length;
+    for (let k = 0; k < this.pts.length; k++) vcopy(ppoly.p[k], this.pts[k]);
+
     this.solved = true;
     return this.length;
   }
@@ -908,6 +1100,183 @@ class RopePathSolver {
     return false;
   }
 
+  /**
+   * PIVOT-SWEEP (v2): Für jedes Seilsegment wird geprüft, welche der zwölf
+   * Kanten jeder nahen Box es seit dem vorigen Substep ÜBERSTRICHEN hat —
+   * exakt, über die bilineare Fläche aus altem und neuem Segment
+   * (`edgeCross2D`), nicht über Quad-Containment.
+   *
+   * Treffer = Kantenkontakt in Pfad-Reihenfolge, mit Orientierung (`side`)
+   * aus der Bewegungsrichtung. Damit entfällt die Greedy-Suche vollständig:
+   * keine Blocker-Raycasts, keine falschen Reihenfolgen, keine Sackgassen
+   * durch gegenläufige Kanten derselben Box.
+   *
+   * Ausnahmen (bewusst):
+   *   · Kanten der Endpunkt-Boxen (Hand/Anker liegen AUF ihrer Box) — dort
+   *     „kreuzt" das Segment die Kante, an der es hängt, in jedem Substep.
+   *   · Boxen, auf denen schon zwei oder mehr Kontakte liegen (Wicklung
+   *     über eine Wand = Ein- und Austrittskante; ein dritter Kontakt wäre
+   *     ein Umschlingen, das der Sweep nicht allein entscheiden kann).
+   *   · Kreuzungen, deren Berührpunkt außerhalb der Kante liegt oder deren
+   *     Zulauf/Ablauf durch die eigene Box läuft (`_segBoxBeyond`) — das
+   *     sind Gleit- statt Wickelfälle bzw. unmögliche Zustände.
+   */
+  _pivotSweep() {
+    const P = this.p;
+    const ST = this.stats;
+    ST.swCalls = (ST.swCalls || 0) + 1;
+    const prev = this._prevPoly;
+    if (!prev || prev.n !== this.pts.length) { ST.swSkip = (ST.swSkip || 0) + 1; return; }
+    if (this.wraps.length >= P.wrapMaxCount) return;
+
+    const ev = this._swEv || (this._swEv = []);
+    ev.length = 0;
+    for (let i = 0; i < this.pts.length - 1; i++) {
+      const a = this.pts[i], b = this.pts[i + 1];
+      const pa = prev.p[i], pb = prev.p[i + 1];
+      const near = this._nearBoxes(a, b, this.ptsBox[i], this.ptsBox[i + 1], null, []);
+      ST.swSegs = (ST.swSegs || 0) + 1;
+      ST.swNear = (ST.swNear || 0) + near.length;
+      for (const bx of near) {
+        let same = 0;
+        for (const w of this.wraps) if (w.box === bx) same++;
+        if (same >= 2) continue;
+        const mn = bx.min, mx = bx.max;
+        for (let e = 0; e < 12; e++) {
+          const pl = EDGE_PL[e], sg = EDGE_SGN[e];
+          const ax = 3 - pl[0] - pl[1];       // die fehlende Achse = Kantenrichtung
+          const u = pl[0], v = pl[1];
+          const qu = (sg[0] === 1 ? mx[u] : mn[u]);
+          const qv = (sg[1] === 1 ? mx[v] : mn[v]);
+          ST.swTests = (ST.swTests || 0) + 1;
+          if (!edgeCross2D(a[u], a[v], b[u], b[v], pa[u], pa[v], pb[u], pb[v], qu, qv)) continue;
+          ST.swCross = (ST.swCross || 0) + 1;
+          /* Kreuzung muss im Achsintervall des Segments liegen: die Kante ist
+             endlich, und das Seil kann sie auch „neben" ihrer Spannweite
+             schneiden (dann gehört der Kontakt an eine andere Kante).       */
+          const s = _EC.s, t = _EC.t, ms = 1 - s, mt = 1 - t;
+          const aa = ms * a[ax] + s * pa[ax], bb2 = ms * b[ax] + s * pb[ax];
+          const axAt = mt * aa + t * bb2;
+          const lo = Math.min(a[ax], b[ax], pa[ax], pb[ax]) - 0.15;
+          const hi = Math.max(a[ax], b[ax], pa[ax], pb[ax]) + 0.15;
+          if (axAt < lo || axAt > hi) { ST.swAxis = (ST.swAxis || 0) + 1; continue; }
+          /* Kantenmitte für die Orientierung: der überstrichene Punkt selbst
+             liegt auf dem Eckwert der Kante, also ist q der Kantenpunkt in
+             der Ebene; axAt ist seine Koordinate entlang der Kante.         */
+          let dup = false;
+          for (const w of this.wraps) if (w.box === bx && w.edgeIdx === e) dup = true;
+          if (dup) { ST.swDup = (ST.swDup || 0) + 1; continue; }
+          let hit = false;
+          for (const o of ev) if (o.box === bx && o.e === e) hit = true;
+          if (hit) { ST.swDup = (ST.swDup || 0) + 1; continue; }
+          ev.push({ i, box: bx, e, ax, axAt, s, t, qu, qv, u, v });
+        }
+      }
+    }
+    if (!ev.length) return;
+    /* Reihenfolge: hintere Segmente zuerst einsetzen, damit die Indizes der
+       vorderen Ereignisse durch das splice gültig bleiben. Innerhalb eines
+       Segments nach Kreuzungszeit, damit bei zwei Überstreichungen in einem
+       Substep die zeitlich erste auch die vordere im Pfad wird.            */
+    ev.sort((p, q) => (q.i - p.i) || (p.s - q.s));
+
+    const p0 = this._pv0 || (this._pv0 = v3()), p1 = this._pv1 || (this._pv1 = v3()), nn = this._pv2 || (this._pv2 = v3());
+    const cp = this._pv3 || (this._pv3 = v3());
+    const aa = this._pv4 || (this._pv4 = v3()), bb3 = this._pv5 || (this._pv5 = v3());
+    for (const o of ev) {
+      if (this.insertBudget <= 0) { ST.swBudget = (ST.swBudget || 0) + 1; continue; }
+      if (this.wraps.length >= P.wrapMaxCount) break;
+      const bx = o.box;
+      boxEdge(bx, o.e, p0, p1, nn);
+      /* Berührpunkt: Schnitt der Sehne prev→next mit der Kante, mit
+         Clearance nach außen — dieselbe Konstruktion wie im Betrieb, damit
+         der neue Kontakt ohne Sprung in die analytische Nachführung geht.   */
+      const i = o.i;
+      const a = this.pts[i], b = this.pts[i + 1];
+      const s = o.s, ms = 1 - s;
+      for (let k = 0; k < 3; k++) {
+        aa[k] = ms * a[k] + s * prev.p[i][k];
+        bb3[k] = ms * b[k] + s * prev.p[i + 1][k];
+      }
+      edgeTouchPoint(aa, bb3, p0, p1, nn, P.wrapClearance, cp);
+      if (_TP.t < 0.02 || _TP.t > _TP.elen - 0.02) { ST.swT = (ST.swT || 0) + 1; continue; }
+      if (!this.world.pointFree(cp, 0.02, true)) { ST.swFree = (ST.swFree || 0) + 1; continue; }
+      /* Der neue Kontakt liegt am ENDE beider Hälften (t = 1 bzw. t = 0);
+             Auflagebereich = ein Mehrfaches der Clearance.                  */
+          const m1 = (P.wrapClearance * 3) / Math.max(0.2, vdist(aa, cp));
+          const m2 = (P.wrapClearance * 3) / Math.max(0.2, vdist(cp, bb3));
+          if (this._segBoxBeyond(aa, cp, bx, 0.05, 1, m1) >= 0 ||
+              this._segBoxBeyond(cp, bb3, bx, 0.05, 0, m2) >= 0) { ST.swSelf = (ST.swSelf || 0) + 1; continue; }
+      const w = makeWrap(bx, o.e);
+      vcopy(w.p, cp);
+      w.t = _TP.t / Math.max(1e-6, _TP.elen);
+      /* Orientierung: auf welcher Seite der Sehne liegt der überstrichene
+         Kantenpunkt — daraus folgt, in welche Richtung das Seil abgleiten
+         kann (für die Freigabe und für spätere Wickel-Entscheidungen).     */
+      const du = bb3[o.u] - aa[o.u], dv = bb3[o.v] - aa[o.v];
+      const wu = o.qu - aa[o.u], wv = o.qv - aa[o.v];
+      w.side = (du * wv - dv * wu) >= 0 ? 1 : -1;
+      this.wraps.splice(i, 0, w);
+      this.insertBudget--;
+      this.stats.pivotInserts = (this.stats.pivotInserts || 0) + 1;
+      this._buildPts(this._A, this._B);
+      if (ST.swLog && ST.swLogN < 40) {
+        ST.swLogN++;
+        ST.swLog.push({ i, e: o.e, box: [bx.min.slice(), bx.max.slice()], cp: cp.slice(), side: w.side });
+      }
+    }
+  }
+
+  /**
+   * Läuft die Strecke a→b durch die Box — und wenn ja, wie weit weg vom
+   * Punkt `nearT` (Parameter des zugehörigen Kontakts auf dieser Strecke)
+   * liegt der durchdrungene Bereich?
+   *
+   * Rückgabe: −1 = frei bzw. nur im Auflagebereich, sonst das Maß des
+   * Hinausreichens (in Bruchteilen der Streckenlänge).
+   *
+   * Warum nicht einfach ein reiner Schnitttest (Strecke↔AABB): Er verbietet
+   * genau den Kontakt, der gebraucht wird. Liegt ein Kontakt an der FALSCHEN
+   * Ecke, schneidet die Sehne die Box — und die richtige neue Kante wird dann
+   * abgelehnt, weil ihre eigene Zulaufhälfte durch die Box läuft (Henne-Ei:
+   * gemessen 7 von 22 Sweep-Treffern abgelehnt, 132 Blockaden blieben
+   * stehen). Physikalisch korrekt ist: das Seil darf die Box dort berühren,
+   * wo es anliegt — der Auflagebereich um den Kontakt ist genau die Stelle,
+   * an der es um die Kante läuft. Was darüber hinaus in die Box reicht, ist
+   * ein unmöglicher Zustand und fliegt.
+   */
+  _segBoxBeyond(a, b, box, shrink, nearT, marginT) {
+    const r = this._segBoxOverlap(a, b, box, shrink);
+    if (!r) return -1;
+    const m = marginT || 0;
+    const lo = Math.max(r.t0, nearT - m), hi = Math.min(r.t1, nearT + m);
+    if (lo >= hi) return Math.max(Math.abs(r.t0 - nearT), Math.abs(r.t1 - nearT));
+    const over = Math.max(r.t0 - (nearT - m), (nearT + m) - r.t1);
+    return over > 1e-9 ? over : -1;
+  }
+
+  /** Slab-Test Strecke↔AABB: null = frei, sonst das Überlappungsintervall
+      [t0,t1] in Bruchteilen der Streckenlänge plus die Welt-Tiefe.         */
+  _segBoxOverlap(a, b, box, shrink) {
+    const sh = shrink || 0;
+    let t0 = 0, t1 = 1;
+    for (let k = 0; k < 3; k++) {
+      const mn = box.min[k] + sh, mx = box.max[k] - sh, d = b[k] - a[k];
+      if (Math.abs(d) < 1e-12) {
+        if (a[k] <= mn || a[k] >= mx) return null;
+      } else {
+        let ta = (mn - a[k]) / d, tb = (mx - a[k]) / d;
+        if (ta > tb) { const x = ta; ta = tb; tb = x; }
+        t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+        if (t0 >= t1) return null;
+      }
+    }
+    const o = this._sobP || (this._sobP = v3());
+    let depth = 0;
+    for (let k = 0; k < 3; k++) { const d = (b[k] - a[k]) * (t1 - t0); o[k] = d; depth += d * d; }
+    return { t0, t1, depth: Math.sqrt(depth) };
+  }
+
   /** Läuft die eigene Route durch Geometrie? (Sackgassen-Indikator) */
   _residualBlocked() { return this._residualBlockedAt() >= 0; }
 
@@ -1041,8 +1410,17 @@ class RopePathSolver {
            gegen die Fläche gezogen und kann nur über eine Kante abrutschen,
            nie durch bloße Sichtfreiheit verschwinden. Mit der globalen Regel
            glitchte das Seil vollständig durch das Objekt.                    */
+        /* PIVOT-Freigabe = Kraftkegel OFFEN *UND* Sehne frei. Jede der beiden
+           Bedingungen allein ist notwendig, aber nicht hinreichend:
+             · Sehne frei allein (legacy) gibt auch pressende Kontakte frei —
+               der Skizzen-Fall: Sicht wird frei, Seil liegt noch um die Seite.
+             · Kegel offen allein gibt Grazing-Kontakte frei, deren Sehne noch
+               durch die Box läuft (gemessen: 382 von 383 blockierte Schritte
+               im Orbit, fast alle hand-nah, alle release-verursacht).
+           Zusammen: gelöst wird nur, was weder drückt noch geometrisch
+           gebraucht wird — und gehalten, was eine der beiden Rollen hat.   */
         const unnecessary = (P.wrapSolver === 'pivot' && w.edgeIdx >= 0)
-          ? this._pivotRelease(w, prev, next, cand)
+          ? (this._pivotRelease(w, prev, next, cand) && !directBlocked)
           : (!directBlocked && this._releaseTopoOK(w, wrapLen - directLen, i));
         /* Physikalische Plausibilitäts-Schranke.
            Eine Umlenkung um eine Box kann niemals wesentlich mehr Seil kosten
@@ -1074,7 +1452,7 @@ class RopePathSolver {
              abstand, der Solver-Irrtum lag bei 12 m — Schwelle 9 m.          */
           const dSeg = (closestOnSegment(this._bogT || (this._bogT = v3()), cand, prev, next),
                         vdist(cand, this._bogT));
-          if (detour > diag*1.35 + P.wrapClearance*6 || dSeg > Math.max(9, cross*1.5 + 1)) {
+          if (P.wrapSolver !== 'pivot' && (detour > diag*1.35 + P.wrapClearance*6 || dSeg > Math.max(9, cross*1.5 + 1))) {
             /* Auch der Bogus-Drop ist ein ENTFERNEN und bekommt deshalb dieselbe
                topologische Schranke wie die Freigabe: ein um die Box gewickeltes
                Seil darf nicht durch eine Plausibilitäts-Schranke verschwinden.
@@ -1108,10 +1486,65 @@ class RopePathSolver {
            neuer Kontakt angelegt — dieser hier bleibt unverändert liegen und
            löst sich über die Hysterese, sobald die Route nicht mehr über ihn
            führt. Bestehende Kontakte ziehen also niemals um.               */
-        if (w.release === 0 && w.edgeIdx >= 0 && w._atEnd)
+        /* Eck-Übergang: im pivot-Modus WIEDER AN (v1 hatte ihn als „Pflaster"
+           abgeschaltet — das war falsch). Ein Kontakt, der ans Ende seiner
+           Kante gleitet, ist dort physikalisch am Eckpunkt; ohne Übergang auf
+           die Nachbarkante bleibt er stecken, die Sehne schneidet die Box,
+           die Selbst-Durchdringungs-Regel wirft ihn raus, der Insert setzt
+           dieselbe Kante neu — ein Kreislauf. Gemessen (West-Anker-Orbit):
+           70 von 73 blockierten Schritten OHNE jeden Säulenkontakt, 44
+           verworfene Kontakte, maxSprung 2,17 m.                          */
+        if ((P.wrapSolver !== 'pivot' || P.pivotCornerSlide) &&
+            w.release === 0 && w.edgeIdx >= 0 && w._atEnd)
           this._cornerSlide(i, prev, next, prevBox, nextBox, w);
 
         if (w.release >= 1) { w._dead = true; this.stats.releaseEvents = (this.stats.releaseEvents || 0) + 1; continue; }
+
+        /* Selbst-Durchdringung: läuft eines der beiden Ankersegmente dieses
+           Kontakts durch seine EIGENE Box, liegt er auf der falschen Seite
+           (Hand hat die Box umrundet, der Kontakt ist auf der alten Seite
+           geblieben). Kein Kegel- und kein Sehnen-Test beschreibt diesen
+           Zustand als fehlerhaft — der Kegel sagt „presst nicht mehr", die
+           Sehne „wird geometrisch gebraucht", zusammen hielte sie einen
+           unmöglichen Kontakt ewig (gemessen: 686 blockierte Schritte im
+           Orbit, 462 davon hand-nah). Das Seil kann nicht durch das Objekt
+           laufen, an dem es hängt: solcher Kontakt wird sofort verworfen;
+           der Sweep legt bei der nächsten Überstreichung den richtigen an. */
+        /* Selbst-Durchdringung — aber nur die TIEFE Variante ist ein
+           unmöglicher Zustand. Messung (tools/probe_orbit2.js, Anker süd-
+           westlich der Säule, also mit echtem Wickel-Zwang):
+             Regel aus            : 22,0 % blockierte Schritte, 0 davon ohne
+                                    Säulenkontakt, maxSprung 6,26 m
+             Regel „irgendwo"     :  5,4 % blockiert, aber 70 von 73 OHNE
+                                    Säulenkontakt und 44 verworfene Kontakte
+                                    — die Regel hat die Wicklung selbst
+                                    aufgefressen, maxSprung 2,17 m
+             Regel „tiefer als die halbe Boxdiagonale im Querschnitt":
+                                    siehe Messwert unten im Kommentarkopf.
+           Grund: Beim Übergang von einer Kante auf die nächste (Seil rutscht
+           um die Ecke) schneidet die Sehne die Box für wenige Ticks flach —
+           das ist der normale Gleitzustand, kein unmöglicher.              */
+        const wM1 = (P.wrapClearance * 3) / Math.max(0.2, vdist(prev, cand));
+        const wM2 = (P.wrapClearance * 3) / Math.max(0.2, vdist(cand, next));
+        let selfPenBad = false;
+        if (P.wrapSolver === 'pivot' && P.pivotSelfPenRule !== 'off' && w.edgeIdx >= 0 &&
+            (this._segBoxBeyond(prev, cand, w.box, 0.05, 1, wM1) >= 0 ||
+             this._segBoxBeyond(cand, next, w.box, 0.05, 0, wM2) >= 0)) {
+          const mn = w.box.min, mx = w.box.max;
+          const ex = mx[0] - mn[0], ez = mx[2] - mn[2];
+          const lim = 0.5 * Math.hypot(ex, ez) * (P.pivotSelfPenDepth || 0.5);
+          const o1 = this._segBoxOverlap(prev, cand, w.box, 0.05);
+          const o2 = this._segBoxOverlap(cand, next, w.box, 0.05);
+          const deep = Math.max(o1 ? o1.depth : 0, o2 ? o2.depth : 0);
+          selfPenBad = deep > lim;
+          if (!selfPenBad) this.stats.pivotSelfPenShallow = (this.stats.pivotSelfPenShallow || 0) + 1;
+        }
+        if (selfPenBad) {
+          w._dead = true;
+          this.stats.pivotSelfPen = (this.stats.pivotSelfPen || 0) + 1;
+          this.stats.releaseEvents = (this.stats.releaseEvents || 0) + 1;
+          continue;
+        }
       }
 
       /* Kontakt bleibt IMMER exakt auf seiner Kante — auch während des
@@ -1351,7 +1784,19 @@ class RopePathSolver {
       let sameBox = 0;
       for (const w of this.wraps) if (w.box === blocker) sameBox++;
       if (sameBox >= 3) continue;
-      // dieselbe Kante nicht doppelt belegen
+      /* Dieselbe Kante derselben Box darf nie ZWEIMAL in der Kontaktliste
+         stehen: zwei identische Kontakte erzeugen ein Nullelement plus zwei
+         volle Auslenkungen zum selben Punkt, also einen Umweg in Reinform
+         (gemessen im West-Anker-Orbit, tools/probe_orbit2.js: Kontaktfolge
+         [Kante 8, Kante 9, Kante 8] mit Kante 8 doppelt auf
+         (32,6 | 2,5 | −25,4); Pfad 17,64 m bei 15,69 m Referenz und ein
+         Längensprung von 1,95 m beim Umräumen).
+         Der Sweep prüft das von Haus aus; der Blocker-Insert kannte nur die
+         ADJAZENZ-Regel (`exclude` unten), die nicht greift, sobald der
+         doppelte Kontakt über einen Nachbarkontakt hinweg eingefügt wird.  */
+      const taken = this._takenEdges || (this._takenEdges = []);
+      taken.length = 0;
+      for (const w of this.wraps) if (w.box === blocker && w.edgeIdx >= 0) taken.push(w.edgeIdx);
       let exclude = -1;
       if (ba === blocker && i >= 1 && this.wraps[i-1] && this.wraps[i-1].box === blocker)
         exclude = this.wraps[i-1].edgeIdx;
@@ -1359,8 +1804,10 @@ class RopePathSolver {
         exclude = this.wraps[i].edgeIdx;
       const cp = v3();
       const contact = this._findContactFor(a, b, ba, bb, cp, { exclude });
-      const e = contact ? contact.edge : -1;
+      let e = contact ? contact.edge : -1;
       const cbox = contact ? contact.box : blocker;
+      if (e >= 0 && cbox === blocker && taken.indexOf(e) >= 0) e = -2;   // Kante schon belegt
+      if (e === -2) continue;
       if (e < 0 && sameBox > 0) continue;   // kein Folgekontakt möglich → nicht erzwingen
       let w;
       if (e < 0) {
