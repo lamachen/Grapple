@@ -2629,6 +2629,7 @@ class Rope {
     this.anchorBox = null;
     this.anchorBody = null;
     this.anchorNormal = v3(0,1,0);
+    this.anchorLocal = v3();   // Ankerpunkt relativ zum Körper (nur wenn anchorBody gesetzt)
     this.farPin = v3();
 
     this.settleActive = false;
@@ -2642,6 +2643,7 @@ class Rope {
 
   reset() {
     this.phase = ROPE_PHASE.IDLE;
+    this.anchorBody = null;
     this.path.reset();
     this.budget = 0; this.budgetEff = 0; this.required = 0; this.slack = 0; this.tension = 0;
     this.retractPos = null;
@@ -2711,7 +2713,14 @@ class Rope {
   attachAt(point, normal, box, body, paidLength) {
     vcopy(this.anchor, point);
     vcopy(this.anchorNormal, normal);
-    this.anchorBox = box; this.anchorBody = body || null;
+    this.anchorBox = box;
+    /* Sitzt der Anker auf einem bewegten Körper (Kiste, Hebebühne, Pendel-Block),
+       wird er body-lokal gespeichert und in step() jedes Mal neu abgeleitet.
+       Vorher blieb er als Weltpunkt stehen: eine gezogene Kiste wanderte weg,
+       das Seilende hing in der Luft (gemessen: Kiste +2,12 m, Anker +0,00 m).
+       Die Körper sind AABBs ohne Rotation, ein reiner Offset genügt. */
+    this.anchorBody = body || ((box && box.dynamic) ? box : null);
+    if (this.anchorBody) vsub(this.anchorLocal, point, this.anchorBody.pos);
     this.budget = clamp(paidLength, this.p.minBudget, this.p.capacity);
     this.path.reset();
     this.phase = ROPE_PHASE.SETTLING;
@@ -2814,6 +2823,9 @@ class Rope {
     vcopy(this.hand, handPos);
 
     if (this.phase === ROPE_PHASE.IDLE) { this.tensionLevel = 0; this.tension = 0; return; }
+
+    // Anker folgt seinem Körper (die Körper wurden in diesem Substep bereits bewegt)
+    if (this.phase !== ROPE_PHASE.FLIGHT && this.anchorBody) vadd(this.anchor, this.anchorBody.pos, this.anchorLocal);
 
     /* ---- 1) Pfad-Topologie -------------------------------------------- */
     if (hookPos) { if (!this.hookPos) this.hookPos = v3(); vcopy(this.hookPos, hookPos); }
@@ -4344,7 +4356,11 @@ class Hook {
       }
       return null;
     }
-    if (this.state === 'stuck') return null;
+    if (this.state === 'stuck') {
+      // Haken sitzt auf einem bewegten Körper → mit dem Anker mitwandern
+      if (rope && rope.anchorBody && rope.attached) vcopy(this.pos, rope.anchor);
+      return null;
+    }
 
     /* ---- ballistischer Flug mit Substeps + Seilzug ---- */
     const g = W.gravity * P.gravityScale;

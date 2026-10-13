@@ -765,7 +765,11 @@ class Hook {
       }
       return null;
     }
-    if (this.state === 'stuck') return null;
+    if (this.state === 'stuck') {
+      // Haken sitzt auf einem bewegten Körper → mit dem Anker mitwandern
+      if (rope && rope.anchorBody && rope.attached) vcopy(this.pos, rope.anchor);
+      return null;
+    }
 
     /* ---- ballistischer Flug mit Substeps + Seilzug ---- */
     const g = W.gravity * P.gravityScale;

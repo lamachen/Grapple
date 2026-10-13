@@ -535,6 +535,54 @@ console.log('\n═══ 9. Rückwirkung: Seil zieht dynamische Kiste ═══'
 }
 
 /* ========================================================================== */
+console.log('\n═══ 9b. Anker folgt bewegten Körpern ═══');
+{
+  // (1) Gezogene Kiste: der Anker muss mitwandern (vorher: Weltpunkt, Seilende hing in der Luft)
+  const w = mkWorld();
+  w.addBox([-40,-2,-40],[40,0,40],{color:[1,1,1]});
+  const crate = w.addBody({ pos:[0,1.0,0], half:[0.8,0.8,0.8], mass:120, friction:0.02 });
+  const s = mkSim(w, { tautMargin:0.0 });
+  E.vset(s.player.pos, 8, 1.0, 0); E.vset(s.player.vel, 0,0,0);
+  const hitPt = [0.8, 1.0, 0];                       // Punkt auf der +x-Fläche der Kiste
+  s.rope.attachAt(hitPt, [1,0,0], crate, crate, 6.0);
+  const off0 = [hitPt[0]-crate.pos[0], hitPt[1]-crate.pos[1], hitPt[2]-crate.pos[2]];
+  const x0 = crate.pos[0];
+  let worst = 0;
+  for (let i=0;i<900;i++){
+    s.player.vel[0] += 12*(1/120);
+    step(s,w,1/120);
+    const d = Math.hypot(s.rope.anchor[0]-(crate.pos[0]+off0[0]),
+                         s.rope.anchor[1]-(crate.pos[1]+off0[1]),
+                         s.rope.anchor[2]-(crate.pos[2]+off0[2]));
+    if (d > worst) worst = d;
+  }
+  ok(crate.pos[0]-x0 > 0.4, 'Kiste wird vom Seil bewegt (Voraussetzung des Tests)', `${(crate.pos[0]-x0).toFixed(2)} m`);
+  ok(worst < 1e-6, 'Anker bleibt an derselben Stelle der Kiste (body-lokal)', `max. Abweichung ${worst.toExponential(2)} m`);
+
+  // (2) Kinematische Plattform: Anker fährt mit
+  const w2 = mkWorld();
+  w2.addBox([-40,-2,-40],[40,0,40],{color:[1,1,1]});
+  const plat = w2.addBody({ pos:[0,3,0], half:[1.5,0.3,1.5], kinematic:true, path:[[0,3,0],[0,9,0]], pathSpeed:2 });
+  const s2 = mkSim(w2, {});
+  E.vset(s2.player.pos, 6, 1.0, 0);
+  s2.rope.attachAt([0,3.3,0], [0,1,0], plat, plat, 9.0);
+  const y0 = s2.rope.anchor[1];
+  for (let i=0;i<240;i++) step(s2,w2,1/120);
+  ok(s2.rope.anchor[1] - y0 > 1.5 && Math.abs(s2.rope.anchor[1] - (plat.pos[1]+0.3)) < 1e-6,
+     'Anker fährt mit einer kinematischen Plattform mit', `Anker-y ${y0.toFixed(2)} → ${s2.rope.anchor[1].toFixed(2)}, Plattform-Oberkante ${(plat.pos[1]+0.3).toFixed(2)}`);
+
+  // (3) Statischer Anker bleibt unverändert, auch nach detach() (kein Rest-Body)
+  const w3 = mkWorld();
+  const s3 = mkSim(w3, {});
+  s3.rope.attachAt([0,12,0], [0,-1,0], null, null, 14);
+  ok(s3.rope.anchorBody === null, 'statischer Anker hat keinen Body');
+  s3.rope.attachAt(crate.pos, [0,1,0], crate, crate, 9);
+  s3.rope.detach();
+  ok(s3.rope.anchorBody === null, 'detach() löscht den Anker-Body');
+
+}
+
+/* ========================================================================== */
 console.log('\n═══ 9c. raycast sieht Körper vor statischer Geometrie ═══');
 {
   // Kiste VOR einer Wand muss gewinnen (vorher: Rückgabe nach dem ersten statischen Treffer)
