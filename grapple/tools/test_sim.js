@@ -516,21 +516,34 @@ console.log('\n═══ 9. Rückwirkung: Seil zieht dynamische Kiste ═══'
 {
   const w = mkWorld();
   w.addBox([-40,-2,-40],[40,0,40],{color:[1,1,1]});
-  const crate = w.addBody({ pos:[0,1.0,0], half:[0.8,0.8,0.8], mass:120, friction:0.02 });
+  const crate = w.addBody({ pos:[0,1.0,0], half:[0.8,0.8,0.8], mass:120, friction:0.25 });
   const s = mkSim(w, { tautMargin:0.0 });
   E.vset(s.player.pos, 8, 1.0, 0); E.vset(s.player.vel, 0,0,0);
   s.rope.attachAt(crate.pos, [1,0,0], crate, crate, 6.0);
   s.player.pos[0] = 8;
-  let moved = 0;
+  s.player.yaw = -Math.PI/2;                     // Blick = +x = von der Kiste weg
+  /* 9a ACTIO = REACTIO, Stillstand: Ein straffes, nicht überdehntes Seil darf
+     an der Kiste NICHT ziehen, solange der Spieler steht. Die alte Schätzung
+     (tensionLevel · 80 kg · g) zog hier mit ~800 N im Stand — genau der
+     befundete Verstoß.                                                     */
+  let movedIdle = 0;
+  const xi = crate.pos[0];
+  for (let i=0;i<120;i++){ step(s,w,1/120); movedIdle = Math.abs(crate.pos[0]-xi); }
+  ok(movedIdle < 0.05, '9a: ruhender Spieler zieht nicht an der Kiste (Actio = Reactio)',
+     `Kiste wandert im Stand ${movedIdle.toFixed(3)} m`);
+  /* 9b Zug: Spieler läuft weg, bis das Seil überdehnt — die Kraft auf die
+     Kiste ist exakt die Constraint-Kraft auf den Spieler (activeForce).    */
+  let moved = 0, maxForce = 0;
   const x0 = crate.pos[0];
   for (let i=0;i<900;i++){
-    // Spieler "läuft" weg (konstante Kraft), Seil muss die Kiste ziehen
-    s.player.vel[0] += 12*(1/120);
-    step(s,w,1/120);
+    step(s, w, 1/120, Object.assign({}, INPUT_IDLE, { forward:true }));
     moved = crate.pos[0] - x0;
+    /* activeForce chattert um slack = 0; der gesammelte Substep-Impuls ist
+       die verlässliche Größe (derselbe Wert, den die Rückwirkung nutzt).  */
+    maxForce = Math.max(maxForce, ((s.rope._reactImpulse || 0) / (1/120)) * 80);
   }
-  ok(moved > 0.4, 'Seilkraft wird in den dynamischen Körper eingekoppelt (Kiste wird gezogen)',
-     `Kiste wandert ${moved.toFixed(2)} m`);
+  ok(moved > 0.4, '9b: Seilkraft wird in den dynamischen Körper eingekoppelt (Kiste wird gezogen)',
+     `Kiste wandert ${moved.toFixed(2)} m bei max. ${maxForce.toFixed(0)} N Seilkraft`);
   ok(finite3(crate.pos), 'Körper bleibt numerisch stabil');
 }
 

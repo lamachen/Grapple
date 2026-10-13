@@ -133,6 +133,9 @@ const ROPE_DEFAULTS = {
                            //        wird. Unterhalb davon gilt: Persistenz
                            //        geht vor (kein Flattern zwischen Topologien).
 
+  playerMass:     80,    // kg — Masse des Spielers für die Kraftrechnung der
+                         //        einseitigen Constraint (Actio = Reactio)
+
   // --- Rückholen (Kabelstaubsauger-Prinzip) ---------------------------------
   retractReelSpeed: 16,    // m/s — Rate, mit der die verfügbare Seillänge beim
                            //        Rückholen eingerollt wird. Der Haken hängt
@@ -1299,15 +1302,19 @@ class RopePathSolver {
       if (!b || !b.dynamic || b.kinematic || !(b.invMass > 0)) continue;
       const idx = i + 1;
       const prev = pts[idx-1], next = pts[idx+1] || pts[idx];
+      /* Reibungsfreie Kante: die Seilspannung T zieht in BOTH Richtungen der
+         Segmente, die Resultante auf die Kante ist T·(u1 + u2) — Betrag bis
+         2T·cos(θ/2), Richtung auf der Winkelhalbierenden. Früher wurde hier
+         T/2 auf die halbe Bisectrix gelegt, also ein Viertel der Physik.   */
       const d1 = vnormSafe(vsubNew(prev, w.p));
       const d2 = vnormSafe(vsubNew(next, w.p));
-      const f = [ (d1[0]+d2[0])*0.5, (d1[1]+d2[1])*0.5, (d1[2]+d2[2])*0.5 ];
-      const l = vlen(f); if (l < 1e-6) continue;
-      const scale = tension * 0.5 / l;
-      b.ropeForce[0] += f[0]*scale; b.ropeForce[1] += f[1]*scale; b.ropeForce[2] += f[2]*scale;
+      const fx = d1[0]+d2[0], fy = d1[1]+d2[1], fz = d1[2]+d2[2];
+      const l = Math.hypot(fx, fy, fz);
+      if (l < 1e-6) continue;
+      b.ropeForce[0] += fx*tension; b.ropeForce[1] += fy*tension; b.ropeForce[2] += fz*tension;
       vcopy(b.ropePoint, w.p);
       b.hasRopeForce = true;
-      w.force = tension * 0.5;
+      w.force = tension * l * 0.5;
     }
     const last = this.ptsBox[this.ptsBox.length-1];
     if (last && last.dynamic && !last.kinematic && last.invMass > 0) {
@@ -1379,7 +1386,7 @@ class Rope {
     this.anchorBody = null;
     this.path.reset();
     this.budget = 0; this.budgetEff = 0; this.required = 0; this.slack = 0; this.tension = 0;
-    this.retractPos = null;
+    this.retractPos = null; this._reactImpulse = 0;
     this.tensionLevel = 0; this.settleActive = false; this.pumpOffset = 0;
     this._settledOnce = true; this._settleTarget = 0; this._tidyT = 0; this._prevWraps = null;
     this._reqPrev = null; this._dropAccum = 0; this._handAccum = 0; this._tidyHandPrev = null;
@@ -1803,21 +1810,23 @@ class Rope {
       this.tension = 0;
     }
 
-    /* ---- 6) Rückwirkung auf dynamische Körper ------------------------- */
-    if (this.attached && this.tensionLevel > 0.02) {
-      const T = Math.max(this.tension, this.tensionLevel * this._estimateLoad(playerVel, dt));
+    /* ---- 6) Rückwirkung auf dynamische Körper -------------------------
+       ACTIO = REACTIO: Die Kraft, die auf die Körper wirkt, ist exakt die
+       Kraft, die die Constraint im vorigen Substep auf den Spieler ausgeübt
+       hat (activeForce = Impuls/dt · playerMass). Früher stand hier eine
+       Schätzung tensionLevel · (80 kg · g · (1 + v²/2gr)) — die zog an der
+       Kiste, auch wenn der Spieler ruhig stand und das Seil keinerlei
+       Überdehnung hatte (Parallel-Befund). Ein straffes Seil ohne Überdehnung
+       übt jetzt definitionsgemäß keine Kraft aus, ein gespanntes genau die,
+       die es auch am Spieler zerrt.                                       */
+    if (this.attached && (this._reactImpulse || 0) > 0) {
+      const T = (this._reactImpulse / Math.max(1e-5, dt)) * (P.playerMass || 80);
       this.path.distributeReaction(T, this.path.dirStart);
     }
+    this._reactImpulse = 0;
 
     /* ---- 7) Visualisierungskette -------------------------------------- */
     this._stepChain(dt, hookPos, playerVel);
-  }
-
-  /** Grobe Lastabschätzung für die Rückwirkung (Zentrifugal + Gewicht). */
-  _estimateLoad(playerVel, dt) {
-    const r = Math.max(1, this.required);
-    const vt2 = vlenSq(playerVel);
-    return (80 * 9.81) * (1 + vt2 / (r * 26));   // Spieler ~80 kg
   }
 
   /* ---------------------------------------------------------------------- */
@@ -1832,6 +1841,8 @@ class Rope {
    */
   constrainPlayer(vel, dt, groundN) {
     if (!this.attached || this.slack > 0) { this.activeForce = 0; return 0; }
+    /* _reactImpulse wird hier bewusst NICHT zurückgesetzt: ein schlaffer
+       Zwischensubstep darf die gesammelte Zugkraft nicht löschen.          */
     const P = this.p;
     // nOut = Richtung, in der die Pfadlänge WÄCHST = -Tangente an der Hand
     const n = this._tmp1;
@@ -1898,7 +1909,12 @@ class Rope {
       vel[0] -= nUse[0]*f; vel[1] -= nUse[1]*f; vel[2] -= nUse[2]*f;
       impulse += f;
     }
-    this.activeForce = impulse / Math.max(1e-5, dt) * 80;  // ≈ Newton bei 80 kg
+    this.activeForce = impulse / Math.max(1e-5, dt) * (P.playerMass || 80);  // Newton
+    /* Impuls zusätzlich SAMMELN: die Constraint chattert um slack = 0 (ein
+       Substep schlaff, einer straff), eine Momentan-Abfrage durch die
+       Rückwirkung würde die Hälfte der Kraft unterschlagen. Die Reaktion
+       liest die Summe seit dem letzten Physik-Schritt.                     */
+    this._reactImpulse = (this._reactImpulse || 0) + impulse;
     return this.activeForce;
   }
 

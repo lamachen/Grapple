@@ -114,10 +114,17 @@ die hat, ist die Constraint daraus fast geschenkt — und die Kette nur noch Dek
 Positionen der Umlenkkontakte. Schicht 2 vergleicht `s(x)` mit dem Budget `L` und
 beeinflusst *ausschließlich* die Geschwindigkeit des Spielers. Schicht 3 bekommt von
 Schicht 1 **nur die Endpunkte und — einmalig beim Neulegen — den Pfad**: keine Zielkurve,
-keine Durchhangvorgabe, keine Steifigkeit, keine Pins an Kontakten. Im laufenden Betrieb
-weiß die Kette nichts vom Pfad; was das Seil tut, ergibt sich aus Gravitation, Trägheit,
-den Längen-Constraints und der Weltkollision. Keine Schicht greift der anderen in die
-Zustände.
+keine Durchhangvorgabe, keine Steifigkeit, keine Pins an Kontakten.
+
+*Stand 2026-10-13, Korrektur zur Zeile oben:* Seit Defekt #53 gilt eine eingeschränkte
+Ausnahme: Bei Straffheit (Spiel < 0,35 m) projiziert `_stepChain` die Kette mit einem
+Gewichtsfaktor auf die Pin-Polylinie (Hand → Umlenkkontakte → fernes Ende), weil
+Gauss-Seidel die Katenaar-Toleranz in 14 Durchläufen prinzipiell nicht trifft (6 cm
+Restüberschuss an 45 m ⇒ 1 m Sichtdurchhang). Mit wachsendem Spiel blendet die
+Projektion stetig aus und die freie Verlet-Dynamik übernimmt wieder vollständig.
+„Die Kette weiß nichts vom Pfad" gilt also exakt nur im Schlaffseil-Fall; die
+Schichten teilen weiterhin keine Zustände, die Projektion liest die Polylinie
+nur als Formvorgabe.
 
 
 ---
@@ -454,6 +461,7 @@ Konsequenz: **keine berechnete Form mehr.** Das Seil ist die Simulation.
 | Nodes | folgen der Seillänge: `L/chainSpacing` (0.45 m), Pool 96. Ändert sich die Zahl, wird entlang der Polylinie neu abgetastet (Position **und** Geschwindigkeit) — stetig, ohne Sprung |
 | Integration | Verlet: `x' = x + (x−x_prev)·damping + g·h²`, `chainDrag` 0.55/s, Verschiebung pro Schritt auf 2 m begrenzt (reine Absturzsicherung) |
 | Länge | Abstands-Constraints auf `L/(n−1)` — `chainIterations` 14 Gauss-Seidel-Sweeps im Richtungswechsel, mit Überrelaxation `chainSOR` 1.6 |
+| Straff-Projektion | *seit 2026-10-13 dokumentiert:* bei Spiel < 0,35 m Formvorgabe aus der Pin-Polylinie (Gewichtsfaktor 0,6·taut), darunter freie Dynamik (Defekt #53) |
 | Überrelaxation | **nur** bei `|Fehler| < Ruhelänge`. Große Fehler (Entfalten, Budget-Sprünge, Peitschen) werden zu 100 % korrigiert — ω > 1 würde dort überschießen und die Kette aufreißen (gemessen: 6 m Lücken, Defekt #49) |
 | Enden | jede Iteration gepinnt: sichtbarer Seil-Austritt (Hand) und Anker bzw. fliegender Haken. Sonst ist alles frei |
 | Kollision | Welt-Kollision im Fenster der letzten 4 Iterationen (nach dem letzten Sweep steckt kein Node in Geometrie), Spielerkapsel, Kontaktsreibung `chainFriction` 0.45 (stabilisiert Seilhaufen auf dem Boden) |
@@ -839,7 +847,7 @@ das Spielgefühl wirklich trägt — den sollte man selbst besitzen.
 
 ```
 grapple/
-├── index.html              fertiges Spiel, 245 KB, keine Abhängigkeiten (reines WebGL2)
+├── index.html              fertiges Spiel, ~305 KB, keine Abhängigkeiten (reines WebGL2)
 ├── README.md               Start, Steuerung, Szenarios
 ├── doc/ARCHITEKTUR.md      dieses Dokument
 ├── doc/architektur.svg     Schichten-Diagramm
@@ -854,7 +862,7 @@ grapple/
 │   └── 07_game.js          Loop, Input, Viewmodel, HUD, Tuning-Panel
 └── tools/
     ├── build.py            konkateniert src/ → index.html
-    ├── test_sim.js         165 physikalische Assertions (headless)
+    ├── test_sim.js         199 physikalische Assertions (headless, Stand 2026-10-13)
     ├── test_browser.js     Renderer/Loop-Smoke-Test gegen DOM+GL-Stub
     ├── check_panel.js      Panel-Regler gegen ihre echten Default-Werte
     └── bench.js            Micro-Benchmarks
