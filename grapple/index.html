@@ -1534,6 +1534,63 @@ const ROPE_DEFAULTS = {
   //     um die blockierende Box (oder ECKPUNKTE als eigenständige Kontakte),
   //     nicht eine weitere Reparatur am Kontakt.
   //
+  // WICHTIG zu Messung B: Ihre „schlimmsten" Schritte sind Testaufbau, nicht
+  // Solver-Defekt. Die Handbahn (Radius 4,5 m um die Säulenmitte) läuft durch
+  // die Levelgeometrie — Box 26 reicht 3,54 m, Box 27 3,68 m von der Mitte.
+  // Die Maske „gültige Hand" (0,4 m Abstand) sortiert diese Schritte aus,
+  // aber sie sortiert GENAU die aus, in denen die Sehne die Boxecke schneidet.
+  // Nachgemessen mit tools/probe_worst.js: der schlimmste blockierte Schritt
+  // lag bei legacy (t = 10,41) an einer Hand 0,03 m innerhalb von Box 26 und
+  // bei pivot (t = 3,06) an einer Hand 1,7 m innerhalb — die Maske griff dort
+  // nicht, weil die Hand ausserhalb des aufgepolsterten Bereichs wieder
+  // auftauchte, während die Sehne längst durch die Box lief. Deshalb Messung C.
+  //
+  // MESSUNG C (tools/probe_wrapclean.js, REINE Testwelt: Boden + EIN Quader
+  //   3,2 × 10 × 3,2 m, Anker frei stehend bei (−9 | 2,5 | 0), Hand auf
+  //   Kreisbahn Radius 4,0 m mit 5 m/s, 16 s = 1920 Schritte, ALLE gültig —
+  //   halbe Diagonale 2,26 m, also 1,74 m Luft; zweimal identisch gelaufen):
+  //     legacy: blockiert 25 (1,30 %), maxTiefe 1,76 m, maxSprung 0,053 m,
+  //             maxUmweg 14,59 m, Kontaktwechsel 11, resyncs 0
+  //     pivot : blockiert 17 (0,89 %), maxTiefe 4,53 m, maxSprung 6,689 m,
+  //             maxUmweg 14,40 m, Kontaktwechsel 14, selfPen 5
+  //   ⇒ pivot ist bei den Blockaden leicht besser und bei der Längenstetigkeit
+  //     katastrophal schlechter (6,69 m gegen 0,053 m Sprung). Der Sprung kommt
+  //     aus den 5 Verwürfen der Selbst-Durchdringungs-Regel: ein verworfener
+  //     Kontakt nimmt seine Auslenkung SOFORT aus der Pfadlänge, ohne
+  //     Offset-Fade. Das ist der Punkt, an dem pivot als nächstes ansetzen
+  //     muss — nicht bei der Erkennung.
+  //
+  // DIE V-SCHLAUFE (in BEIDEN Modi, betrifft also auch das ausgelieferte Spiel):
+  //   t ≈ 6 s, Hand (−3,71 | 2,5 | 1,50), Anker (−9 | 2,5 | 0): die freie
+  //   Route ist 5,50 m, der Solver hält 19,70 m — 14,20 m Umweg, mit drei
+  //   Kontakten, die alle auf der ABGEWANDTEN Seite der Säule liegen (Kanten
+  //   10, 9, 8 auf (1,7 | 2,5 | ±1,7) und (−1,7 | 2,5 | −1,7)). Jeder einzelne
+  //   ist lokal notwendig: die Sehne zum Nachbarkontakt läuft durch die Säule,
+  //   also directBlocked ⇒ Kegel UND Sehne halten ihn. Die MENGE ist falsch,
+  //   nicht das Element; lokale Freigabe kann das prinzipiell nicht sehen.
+  //   `_pivotCleanup` (neu, pivot-eigen, 10 Hz, nur im Attached-Betrieb)
+  //   vergleicht deshalb die ganze Kontaktmenge mit der gedächtnislosen
+  //   Referenz und tauscht sie, wenn die Referenz strenger kürzer UND
+  //   kollisionsfrei ist — aber nur, wenn Live- und Referenz-Route um jede
+  //   kontaktierte Box denselben Umlaufwinkel haben (Homotopieklasse
+  //   erhalten). Die erste Fassung prüfte stattdessen „Live-Winkel ≈ 0" und
+  //   hielt damit 50 von 52 Aufrufen, weil das Zickzack selbst ±π/2 windet:
+  //   „gewickelt" und „Zickzack" sind über den Winkel der Live-Route allein
+  //   nicht zu unterscheiden.
+  //   Gemessen (76 Aufrufe): 30 × Referenz selbst blockiert, 46 × Drift unter
+  //   der Schwelle, 0 × Tausch möglich, maxUmweg unverändert 14,40 m. Ein
+  //   Versuch, die Referenz in einer Schleife frei zu lösen, hat sie zwar
+  //   repariert (10,66 m quer durch die Säule statt 9,06 m Luftlinie), am
+  //   Ergebnis aber nichts geändert und die Kontakt-Verwürfe von 125 auf 4805
+  //   getrieben — zurückgenommen, Befund steht bei `_freshRoute`.
+  //   ⇒ Dieses Aufräumen erreicht die V-Schlaufe nicht, und der Grund ist
+  //     grundsätzlich: Der Zustand IST ein Topologiewechsel (Live-Winkel
+  //     −4,48 rad gegen Referenz +1,80 rad), und ein Topologiewechsel unter
+  //     Last ist exakt der gemeldete Skizzen-Fehler. „V-Schlaufe aufräumen"
+  //     und „Wicklung nicht teleportieren" sind dieselbe Entscheidung mit
+  //     umgekehrtem Vorzeichen. Das ist eine Produktentscheidung, keine
+  //     fehlende Zeile Code — ausgeliefert wird die konservative Seite.
+  //
   // STAND v0 (zur Referenz, Messung OHNE Maske — deshalb andere Zahlen):
   // Kraftkegel-Freigabe (_pivotRelease) und Sweep-Insert überstrichener
   // vertikaler Kanten sind drin und laufen stabil, bringen in der
@@ -1950,6 +2007,15 @@ class RopePathSolver {
     if (P.wrapSolver === 'pivot') {
       this.insertBudget = P.wrapInsertsPerFrame;
       this._pivotSweep();
+      /* Aufräumen mit topologischer Schranke (pivot-eigen, nicht der legacy-
+         Resync):niedrig frequentiert, nur im Attached-Betrieb, und NIE gegen eine Wicklung. */
+      if (this._hostSettled && this.wraps.length > 0) {
+        this._resyncT = (this._resyncT || 0) - dt;
+        if (this._resyncT <= 0) {
+          this._resyncT = 1 / Math.max(1, P.resyncHz || 10);
+          this._pivotCleanup();
+        }
+      }
     }
 
     if (full) {
@@ -2268,8 +2334,15 @@ class RopePathSolver {
     }
     this.wraps.length = 0;
     this._buildPts(this._A, this._B);
-    this.converge();
-
+    /* BEFUND (Versuch zurückgenommen): `converge()` hier in einer Schleife zu
+       wiederholen, bis die Referenz frei ist, hat die Referenz zwar repariert
+       (10,66 m quer durch die Säule statt 9,06 m Luftlinie), aber am Ergebnis
+       nichts geändert — maxUmweg blieb 14,40 m, Tausch-Quote 2 von 52 — und
+       die Kontakt-Verwürfe der Selbst-Durchdringungs-Regel von 125 auf 4805
+       getrieben, weil `converge()` in der Schleife Kontakte auf Kanten setzt,
+       die live sofort wieder verworfen werden. Kosten: doppelte Laufzeit
+       (26 s statt 14 s für denselben Messlauf). Also: einmal `converge()`,
+       wie vorher, und die Referenz bleibt, was sie ist — eine grobe.      */
     let out = null;
     let ok = true;
     for (let k = 0; k < this.pts.length - 1 && ok; k++) {
@@ -2615,6 +2688,112 @@ class RopePathSolver {
      muss ECKPUNKTE als eigenständige Kontakte zulassen. Beides ist größer als
      eine Reparatur und gehört nicht mehr in diesen Commit.
      ------------------------------------------------------------------------ */
+  /**
+   * PIVOT-Aufräumen: Kontaktmenge ersetzen, wenn die gedächtnislos gelöste
+   * Route strenger kürzer UND kollisionsfrei ist — aber NIE gegen eine
+   * Wicklung.
+   *
+   * Der Defekt, den das behebt (tools/probe_wrapclean.js, reine Testwelt:
+   * Boden + EIN Quader, Hand auf Kreisbahn, jeder Schritt gültig):
+   *   Hand (−3,71 | 2,5 | 1,50), Anker (−9 | 2,5 | 0), freie Route 5,50 m —
+   *   der Solver hält 19,70 m, also 14,20 m Umweg, mit drei Kontakten, die
+   *   alle auf der ABGEWANDTEN Seite der Säule liegen (Kanten 10, 9, 8 auf
+   *   (1,7 | 2,5 | ±1,7) und (−1,7 | 2,5 | −1,7)). In BEIDEN Modi, legacy
+   *   wie pivot: maxUmweg 14,36 bzw. 14,40 m. Das ist die gemeldete
+   *   „V-Schlaufe".
+   *
+   * Warum keine lokale Regel daran kommt: Jeder der drei Kontakte ist für
+   * sich genommen NOTWENDIG — die Sehne zum Nachbarkontakt läuft durch die
+   * Säule, also ist `directBlocked` wahr, Kegel UND Sehne halten ihn. Die
+   * Menge ist falsch, nicht das Element. Lokale Freigabe kann das prinzipiell
+   * nicht sehen, und genau dafür hatte legacy den Drift-Resync (Vergleich
+   * gegen die gedächtnislose Referenz).
+   *
+   * Warum das hier trotzdem kein Pflaster ist: Die legacy-Variante braucht
+   * zwei Zusatzregeln (Teilmenge der Kontaktmenge, sonst „Solver-Müll"
+   * schrittweise entfernen), weil sie ohne Topologie-Begriff auskommen muss.
+   * Hier entscheidet der UMLAUFWINKEL: liegt die Route um irgendeine der
+   * kontaktierten Boxen mit |Winkel| über `wrapWindTol` herum, ist das Seil
+   * topologisch gefangen und darf seine Homotopieklasse unter Last nicht
+   * wechseln — dann passiert nichts (Zähler `pivotWindHeld`). Liegt sie
+   * nirgends herum, sind die Kontakte Reste einer bereits abgewickelten
+   * Schleife, und der Tausch ist physikalisch korrekt. Der Längensprung geht
+   * wie bei jedem Topologiewechsel in den Offset-Fade (`resyncFade`), die
+   * Constraint sieht also eine stetige Länge.
+   *
+   * Das ist dieselbe Schranke, die `_releaseTopoOK` für die lokale Freigabe
+   * setzt — nur eben auf die ganze Kontaktmenge angewandt statt auf einen
+   * einzelnen Kontakt.
+   */
+  _pivotCleanup() {
+    const P = this.p;
+    const fr = this._freshRoute();
+    if (!fr) { this.stats.pcNull = (this.stats.pcNull || 0) + 1; return false; }   // Referenz selbst blockiert
+    /* Eine kontaktlose Referenz ist ein Topologiewechsel; bei EINEM Kontakt
+       überlässt legacy das der lokalen Freigabe mit ihrer Hysterese. Hier
+       gilt dasselbe, aber die Schranke ist der Umlaufwinkel, nicht die
+       Kontaktzahl — bei Winkel ≈ 0 darf der Einzelkontakt sofort weg.     */
+    if (this.lengthGeo - fr.len <= (P.resyncDrift || 0.4)) {
+      this.stats.pcDrift = (this.stats.pcDrift || 0) + 1;
+      return false;
+    }
+
+    /* Schranke: HOMOTOPIEKLASSE, nicht „Winkel ungleich null".
+       Die erste Fassung prüfte |Umlaufwinkel der Live-Route| > wrapWindTol und
+       hielt damit 50 von 52 Aufrufen — auch die V-Schlaufe, die sie doch
+       aufräumen sollte: deren Zickzack hat selbst einen Umlaufwinkel von
+       ±π/2 um die Säule (Hand → (1,7|1,7) → (1,7|−1,7) → (−1,7|−1,7) → Anker,
+       drei rechtwinklige Knicke, alle konvex). „Gewickelt" und „Zickzack" sind
+       über den Winkel der Live-Route allein also NICHT zu unterscheiden.
+       Entscheidend ist der Vergleich: Live-Route und gedächtnislose Referenz
+       müssen um jede kontaktierte Box denselben Umlaufwinkel haben. Dann
+       bleibt der Tausch in derselben Homotopieklasse — das Seil wechselt nicht
+       die Seite, es wird nur kürzer eingerichtet. Weichen die Winkel
+       auseinander, ist es ein echter Topologiewechsel, und der bleibt der
+       lokalen Freigabe mit ihrer Hysterese überlassen (Skizzen-Fall: das
+       topologisch gefangene Seil darf nicht durch die Hintertür des
+       Aufräumens teleportieren).                                        */
+    const seen = this._pcSeen || (this._pcSeen = []);
+    seen.length = 0;
+    /* Referenz-Route für den Winkelvergleich nachbauen */
+    const rpts = this._pcPts || (this._pcPts = []);
+    rpts.length = 0;
+    rpts.push(this._A);
+    for (const f of fr) rpts.push(f.p);
+    rpts.push(this._B);
+    const tol = P.wrapWindTol || 0.6;
+    for (const w of this.wraps) {
+      if (!w.box || w.edgeIdx < 0) continue;
+      let known = false;
+      for (const b of seen) if (b === w.box) known = true;
+      if (known) continue;
+      seen.push(w.box);
+      const wLive = this._pathWindingXZ(this.pts, w.box);
+      const wRef = this._pathWindingXZ(rpts, w.box);
+      if (Math.abs(wLive - wRef) > tol) {
+        this.stats.pivotWindHeld = (this.stats.pivotWindHeld || 0) + 1;
+        return false;                            // echter Topologiewechsel: kein Tausch
+      }
+    }
+
+    const gain = Math.max(0, this.lengthGeo - fr.len);
+    this.stats.pcGainSeen = (this.stats.pcGainSeen || 0) + gain;
+    this.wraps.length = 0;
+    for (const f of fr) {
+      const w = makeWrap(f.box, f.edgeIdx);
+      vcopy(w.p, f.p);
+      if (f.box.dynamic) vsub(w.localOff, f.p, f.box.pos);
+      this.wraps.push(w);
+    }
+    this._buildPts(this._A, this._B);
+    this._measure();
+    this._lenOff = (this._lenOff || 0) + gain;
+    this.length = this.lengthGeo + this._lenOff;
+    this.stats.pivotSwaps = (this.stats.pivotSwaps || 0) + 1;
+    this.stats.pivotSwapGain = (this.stats.pivotSwapGain || 0) + gain;
+    return true;
+  }
+
   /**
    * Läuft die Strecke a→b durch die Box — und wenn ja, wie weit weg vom
    * Punkt `nearT` (Parameter des zugehörigen Kontakts auf dieser Strecke)
