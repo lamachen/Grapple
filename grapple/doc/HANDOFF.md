@@ -276,6 +276,43 @@ Das Spiel liegt als gebautes Artefakt **nicht** im Repo (`.github/workflows/page
 
 ---
 
+## 7b. Sicherungspunkt vor der Übergabe an den AI Studio App Builder
+
+Bevor das Repo mit einem App Builder verbunden wurde (Stand 2026-10-13), ist der Zustand von
+`main` **zweifach** gesichert worden — als Branch und als annotierter Tag, beide auf GitHub:
+
+```
+backup/pre-ai-studio-2026-10-13   → 8476696   (Branch)
+pre-ai-studio-2026-10-13          → 8476696   (annotierter Tag, Nachricht beschreibt den Stand)
+main                              → 8476696
+```
+
+Tree-Identität geprüft: `main^{tree}` = `backup/…^{tree}` = `f7710eb9a20c4bcd36cb8bcdbf58d759f77c564f`.
+
+**Wiederherstellen:**
+
+```bash
+git fetch origin --tags
+git checkout -b restore main                      # oder direkt auf den Tag
+git reset --hard pre-ai-studio-2026-10-13         # Stand vor der Übergabe
+# Vergleich, was sich seitdem geändert hat:
+git diff --stat pre-ai-studio-2026-10-13 main
+git log --oneline pre-ai-studio-2026-10-13..main
+```
+
+Der Tag trägt die ausführliche Beschreibung (Suite-Zahlen, offene Defekte, die vier Doku-Dateien)
+in seiner Nachricht: `git tag -l -n30 pre-ai-studio-2026-10-13`.
+
+**Zwei veraltete Remote-Branches stehen noch herum** und sind Kandidaten zum Aufräumen — beide
+sind harmlos, aber sie verwirren beim Überblick:
+
+| Branch | Stand | Status |
+|---|---|---|
+| `feature/pivot-solver` | `72797f2` | **veraltet** — war mit `main` gleichgezogen und ist dann auf GitHub stehen geblieben, während `main` weiterlief (`8476696`). Inhaltlich vollständig in `main` enthalten |
+| `fix/anchor-follow-and-raycast` | `c77b2f9` | seit `c3db832` vollständig in `main` gemergt |
+
+---
+
 ## 8. Offene Fragen an den Projekteigner
 
 1. **P1 angehen?** Der 2π-Verlust ist der älteste offene Defekt und betrifft das ausgelieferte
